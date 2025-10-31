@@ -438,7 +438,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
         try:
             df = supporting_df.fillna("").astype(str)
             story.append(PageBreak())
-            story.append(Paragraph("Supporting Documents / Excel data", title_style))
+            story.append(Paragraph("Supporting Document", title_style))
             story.append(Spacer(1,6))
 
             cols = list(df.columns)

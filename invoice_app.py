@@ -402,9 +402,6 @@ def main():
                                 else:
                                     add_client(name, gstin, pan, address, email)
                                     st.success("Client saved (manual).")
-            with c2:
-                st.info("Put Appyflow key in Streamlit secrets: [appyflow] key_secret = \"YOUR_KEY\"")
-
         with st.expander("Edit / Delete Client"):
             clients_list = get_clients()
             clients_map = {f"{c[1]} ({c[2]})": c[0] for c in clients_list}

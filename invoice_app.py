@@ -49,10 +49,10 @@ COMPANY = {
     "branch": "LAKDIKAPUL, HYD-004",
     "address": "# 403, 4th Floor, Diamond Block, Lumbini Rockdale, Somajiguda, Hyderabad - 500082, Telangana",
     "email": "mailadmin@cruxmanagement.com",
-    "logo_top": "assets/logo_top.jpeg",
-    "tagline": "assets/tagline.jpeg",
-    "company_text": "assets/company_text.jpeg",
-    "signature": "assets/signature_stamp.jpeg"
+    "logo_top": "assets/logo_top.jpg",
+    "tagline": "assets/tagline.jpg",
+    "company_text": "assets/company_text.jpg",
+    "signature": "assets/signature_stamp.jpg"
 }
 
 # ---------- Helpers ----------

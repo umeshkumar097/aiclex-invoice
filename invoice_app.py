@@ -239,7 +239,11 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
 
     inv_table = Table([[Paragraph(left_html, wrap_style), Paragraph(right_html, wrap_style)]],
                       colWidths=[page_width*0.55, page_width*0.45])
-    inv_table.setStyle(TableStyle([('BOX',(0,0),(-1,-1),0.5,colors.grey), ('INNERGRID',(0,0),(-1,-1),0.25,colors.grey), ('VALIGN',(0,0),(-1,-1),'TOP')]))
+    inv_table.setStyle(TableStyle([
+        ('BOX',(0,0),(-1,-1),0.5,colors.grey),
+        ('INNERGRID',(0,0),(-1,-1),0.25,colors.grey),
+        ('VALIGN',(0,0),(-1,-1),'TOP')
+    ]))
     story.append(inv_table)
     story.append(Spacer(1,10))
 
@@ -301,7 +305,12 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     totals_data.append(["NET PAYABLE", Paragraph("₹ {:,.2f}".format(net_payable), wrap_style)])
 
     t_tot = Table(totals_data, colWidths=[page_width*0.65, page_width*0.35], hAlign='RIGHT')
-    t_tot.setStyle(TableStyle([('GRID',(0,0),(-1,-1),0.25,colors.grey),('ALIGN',(1,0),(1,-1),'RIGHT'),('BACKGROUND',(0,-1),(-1,-1),colors.whitesmoke),('FONTNAME',(-1,-1),(-1,-1),'Helvetica-Bold')]))
+    t_tot.setStyle(TableStyle([
+        ('GRID',(0,0),(-1,-1),0.25,colors.grey),
+        ('ALIGN',(1,0),(1,-1),'RIGHT'),
+        ('BACKGROUND',(0,-1),(-1,-1),colors.whitesmoke),
+        ('FONTNAME',(-1,-1),(-1,-1),'Helvetica-Bold'),
+    ]))
     story.append(t_tot)
     story.append(Spacer(1,8))
 
@@ -351,7 +360,11 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
         for _, r in df.iterrows():
             data.append(list(r.values))
         sup_tbl = Table(data, repeatRows=1)
-        sup_tbl.setStyle(TableStyle([('GRID',(0,0),(-1,-1),0.25,colors.grey),('BACKGROUND',(0,0),(-1,0),colors.whitesmoke),('FONTSIZE',(0,0),(-1,-1),8)]))
+        sup_tbl.setStyle(TableStyle([
+            ('GRID',(0,0),(-1,-1),0.25,colors.grey),
+            ('BACKGROUND',(0,0),(-1,0),colors.whitesmoke),
+            ('FONTSIZE',(0,0),(-1,-1),8)
+        ]))
         story.append(sup_tbl)
 
     doc.build(story)
@@ -447,7 +460,7 @@ def main():
         if st.button("Add New Row"):
             new_sl = len(st.session_state.rows) + 1
             st.session_state.rows.append({"slno":new_sl,"particulars":"","description":"","sac_code":"","qty":0,"rate":0,"taxable_amount":0})
-            st.experimental_rerun()
+            st.rerun()
 
         # Editable rows UI with actions
         for idx in range(len(st.session_state.rows)):
@@ -475,32 +488,32 @@ def main():
                 with bcol1:
                     if st.button("Remove", key=f"remove_{idx}"):
                         st.session_state.rows.pop(idx)
-                        st.experimental_rerun()
+                        st.rerun()
                 with bcol2:
                     if st.button("Duplicate", key=f"dup_{idx}"):
                         dup = st.session_state.rows[idx].copy()
                         st.session_state.rows.insert(idx+1, dup)
                         for i, rr in enumerate(st.session_state.rows, start=1):
                             rr['slno'] = i
-                        st.experimental_rerun()
+                        st.rerun()
                 with bcol3:
                     if st.button("Move Up", key=f"up_{idx}") and idx > 0:
                         st.session_state.rows[idx-1], st.session_state.rows[idx] = st.session_state.rows[idx], st.session_state.rows[idx-1]
                         for i, rr in enumerate(st.session_state.rows, start=1):
                             rr['slno'] = i
-                        st.experimental_rerun()
+                        st.rerun()
                 with bcol4:
                     if st.button("Move Down", key=f"down_{idx}") and idx < len(st.session_state.rows)-1:
                         st.session_state.rows[idx+1], st.session_state.rows[idx] = st.session_state.rows[idx], st.session_state.rows[idx+1]
                         for i, rr in enumerate(st.session_state.rows, start=1):
                             rr['slno'] = i
-                        st.experimental_rerun()
+                        st.rerun()
 
         # Add Row button (bottom)
         if st.button("Add New Row (Bottom)"):
             new_sl = len(st.session_state.rows) + 1
             st.session_state.rows.append({"slno":new_sl,"particulars":"","description":"","sac_code":"","qty":0,"rate":0,"taxable_amount":0})
-            st.experimental_rerun()
+            st.rerun()
 
         use_igst = st.checkbox("Use IGST (18%)", value=False)
         advance_received = st.number_input("Advance Received (if any)", min_value=0.0, value=0.0)

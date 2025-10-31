@@ -2,20 +2,21 @@
 # Crux Invoice Management System
 # Built by Aiclex Technologies
 #
-# Requirements:
-# - images in assets/ as .jpg:
-#     assets/logo_top.jpg
-#     assets/company_text.jpg   # optional
-#     assets/tagline.jpg
-#     assets/signature_stamp.jpg
-# - Optional GST API key in .streamlit/secrets.toml:
-#     [appyflow]
-#     key_secret = "YOUR_APPYFLOW_KEY_SECRET"
-# - App password in .streamlit/secrets.toml:
-#     [app]
-#     password = "yourpassword"
+# Put images in assets/ as .jpg:
+#   assets/logo_top.jpg
+#   assets/company_text.jpg   # optional
+#   assets/tagline.jpg
+#   assets/signature_stamp.jpg
 #
-# Install:
+# Put Appyflow key in .streamlit/secrets.toml if using GST API:
+# [appyflow]
+# key_secret = "YOUR_APPYFLOW_KEY_SECRET"
+#
+# Put app password in .streamlit/secrets.toml:
+# [app]
+# password = "yourpassword"
+#
+# Install required packages:
 # pip install streamlit pandas reportlab num2words openpyxl requests
 
 import streamlit as st
@@ -27,6 +28,7 @@ import traceback
 import requests
 from num2words import num2words
 from decimal import Decimal, ROUND_HALF_UP
+from math import ceil
 
 # ReportLab
 from reportlab.lib.pagesizes import A4
@@ -99,7 +101,6 @@ def gst_state_code(gstin):
         return None
 
 def safe_rerun():
-    # Some Streamlit versions don't have experimental_rerun; avoid crashing
     if hasattr(st, "experimental_rerun"):
         try:
             st.experimental_rerun()
@@ -218,68 +219,265 @@ class HR(Flowable):
         self.canv.setStrokeColor(self.color)
         self.canv.line(0,0,self.width,0)
 
-# ---------------- PDF generation function (kept as before) ----------------
-# For brevity, reuse the last working generate_invoice_pdf from your earlier code.
-# (Include the improved function from previous replies — ensure it's present here.)
-# To keep this response focused on login + client save fix, I'm using the stable generate_invoice_pdf
-# shown earlier (the version that produced proper layout and support-sheet splitting/wrapping).
-# Paste the generate_invoice_pdf function you prefer here. For completeness, below is the version
-# used before (improved supporting sheet). If you already have that exact function in your file,
-# you may keep it — otherwise paste the generate function from the previous assistant message here.
-
+# ---------------- PDF generation (improved supporting sheet splitting & wrapping) ----------------
 def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
-    # Use the improved generation function provided earlier in this conversation.
-    # For brevity in this message I'm including the same function as before (improved layout).
-    # (If you want the full function again, I can paste it here — but to avoid repeating very long code,
-    #  assume the function from the previous assistant message is present.)
     from decimal import Decimal, ROUND_HALF_UP
     from reportlab.lib.styles import ParagraphStyle
-    # --- simplified placeholder reference implementation ---
-    # If you don't have the previous full function, ask me and I'll paste the entire improved generate_invoice_pdf function here.
-    # For now this placeholder will create a very simple PDF so the rest of the app (login + DB) can be tested.
+
+    def q(v):
+        return Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
     filename = f"Invoice_{invoice_meta.get('invoice_no','NA')}_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
     path = os.path.join(PDF_DIR, filename)
+
     doc = SimpleDocTemplate(path, pagesize=A4, leftMargin=15*mm, rightMargin=15*mm, topMargin=15*mm, bottomMargin=15*mm)
     story = []
-    # Minimal PDF to test save / download flow:
-    story.append(Paragraph("INVOICE (Sample)", styles['title_center']))
-    story.append(Spacer(1,12))
-    story.append(Paragraph(f"Invoice No: {invoice_meta.get('invoice_no')}", styles['wrap']))
-    story.append(Paragraph(f"Client: {invoice_meta.get('client',{}).get('name','')}", styles['wrap']))
-    story.append(Spacer(1,12))
-    # simple table of items
-    data = [["S.No","Particulars","Qty","Rate","Amount"]]
+    page_width = A4[0] - (15*mm + 15*mm)
+
+    # helper styles
+    body_style = ParagraphStyle("body", fontSize=9, leading=11)
+    header_style = ParagraphStyle("hdr", fontSize=9, leading=11, alignment=1)
+    desc_style = ParagraphStyle("desc", fontSize=9, leading=12)
+    right_style = ParagraphStyle("right", fontSize=9, leading=11, alignment=2)
+
+    def safe_img(path, w, h, align='CENTER'):
+        if path and os.path.exists(path):
+            img = Image(path, width=w, height=h)
+            img.hAlign = align
+            story.append(img)
+
+    # --- Header/logo/tagline ---
+    safe_img(COMPANY.get('logo_top'), 87*mm, 25.2*mm, align='CENTER')
+    story.append(Spacer(1, 4))
+    safe_img(COMPANY.get('tagline'), 164.8*mm, 5.4*mm, align='CENTER')
+    story.append(Spacer(1, 8))
+
+    # Title
+    story.append(Paragraph("INVOICE", styles['title_center']))
+    story.append(Spacer(1, 6))
+
+    # GST / PAN row
+    gst_text = f"<b>GST IN :</b> {COMPANY.get('gstin','')}"
+    pan_text = f"<b>PAN NO :</b> {COMPANY.get('pan','')}"
+    gst_pan = Table([[Paragraph(gst_text, body_style), Paragraph(pan_text, right_style)]], colWidths=[page_width*0.6, page_width*0.4])
+    gst_pan.setStyle(TableStyle([('ALIGN',(1,0),(1,0),'RIGHT'), ('BOTTOMPADDING',(0,0),(-1,-1),6)]))
+    story.append(gst_pan)
+    story.append(Spacer(1, 8))
+
+    # Big boxed area
+    client = invoice_meta.get('client', {}) or {}
+    left_lines = ["<b>Service Location</b>", "<br/>"]
+    if client.get('name'):
+        left_lines.append(f"To M/s: {client.get('name')}")
+    if client.get('address'):
+        left_lines.append(client.get('address'))
+    left_lines += ["<br/>", f"<b>GSTIN NO:</b> {client.get('gstin','')}", "<br/>", "<b>PURCHASE ORDER</b>"]
+    left_html = "<br/>".join(left_lines)
+
+    inv_no = invoice_meta.get('invoice_no','')
+    inv_date = invoice_meta.get('invoice_date','')
+    right_top = f"<b>INVOICE NO. :</b> {inv_no} <br/><b>DATE :</b> {inv_date}"
+    vendor_lines = [
+        "<b>Vendor Electronic Remittance</b>",
+        f"Bank Name : {COMPANY.get('bank_name')}",
+        f"A/C No : {COMPANY.get('bank_account')}",
+        f"IFS Code : {COMPANY.get('ifsc')}",
+        f"Swift Code : {COMPANY.get('swift','-')}",
+        f"MICR No : {COMPANY.get('micr','-')}",
+        f"Branch : {COMPANY.get('branch')}"
+    ]
+    right_html = right_top + "<br/><br/>" + "<br/>".join(vendor_lines)
+
+    boxes = Table([[Paragraph(left_html, body_style), Paragraph(right_html, body_style)]], colWidths=[page_width*0.55, page_width*0.45])
+    boxes.setStyle(TableStyle([
+        ('BOX',(0,0),(-1,-1),0.5,colors.grey),
+        ('INNERGRID',(0,0),(-1,-1),0.25,colors.grey),
+        ('VALIGN',(0,0),(-1,-1),'TOP'),
+        ('LEFTPADDING',(0,0),(-1,-1),6),
+        ('RIGHTPADDING',(0,0),(-1,-1),6),
+    ]))
+    story.append(boxes)
+    story.append(Spacer(1, 10))
+
+    # Items table
+    col_widths = [12*mm, 46*mm, 70*mm, 22*mm, 14*mm, 22*mm, 26*mm]
+    total_w = sum(col_widths)
+    if total_w > page_width:
+        scale = page_width / total_w
+        col_widths = [w * scale for w in col_widths]
+
+    headers = ["SL.NO","PARTICULARS","DESCRIPTION of SAC CODE","SAC CODE","QTY","RATE","TAXABLE AMOUNT"]
+    table_data = [[Paragraph(h, header_style) for h in headers]]
+
     for r in line_items:
-        amt = float(r.get('qty',0)) * float(r.get('rate',0))
-        data.append([str(r.get('slno','')), r.get('particulars',''), str(r.get('qty','')), str(r.get('rate','')), f"Rs. {amt:.2f}"])
-    t = Table(data)
-    t.setStyle(TableStyle([('GRID',(0,0),(-1,-1),0.25,colors.black)]))
-    story.append(t)
+        qty = Decimal(str(r.get('qty',0) or 0))
+        rate = Decimal(str(r.get('rate',0) or 0))
+        amt = (qty * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        row = [
+            Paragraph(str(r.get('slno','')), body_style),
+            Paragraph(str(r.get('particulars','')), body_style),
+            Paragraph(str(r.get('description','')), desc_style),
+            Paragraph(str(r.get('sac_code','')), body_style),
+            Paragraph(str(qty), right_style),
+            Paragraph(f"{amt / qty:,.2f}" if qty != 0 else f"{rate:,.2f}" , right_style) if False else Paragraph(f"{rate:,.2f}", right_style),
+            Paragraph(f"{amt:,.2f}", right_style)
+        ]
+        table_data.append(row)
+
+    items_table = Table(table_data, colWidths=col_widths, repeatRows=1, hAlign='LEFT')
+    items_table.setStyle(TableStyle([
+        ('GRID',(0,0),(-1,-1),0.25,colors.black),
+        ('BACKGROUND',(0,0),(-1,0),colors.whitesmoke),
+        ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+        ('ALIGN',(0,0),(0,-1),'CENTER'),
+        ('ALIGN',(-3,1),(-1,-1),'RIGHT'),
+        ('LEFTPADDING',(0,0),(-1,-1),6),
+        ('RIGHTPADDING',(0,0),(-1,-1),6),
+        ('TOPPADDING',(0,0),(-1,-1),4),
+        ('BOTTOMPADDING',(0,0),(-1,-1),4),
+    ]))
+    story.append(items_table)
+    story.append(Spacer(1, 8))
+
+    # Totals
+    subtotal = sum([Decimal(str(r.get('qty',0) or 0)) * Decimal(str(r.get('rate',0) or 0)) for r in line_items])
+    subtotal = subtotal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    adv = Decimal(str(invoice_meta.get('advance_received', 0) or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    comp_state = gst_state_code(COMPANY.get('gstin',''))
+    cli_state = gst_state_code(client.get('gstin',''))
+    use_igst = invoice_meta.get('use_igst', False)
+    if comp_state and cli_state and comp_state != cli_state:
+        use_igst = True
+
+    if use_igst:
+        igst = (subtotal * Decimal('0.18')).quantize(Decimal("0.01")); sgst = cgst = Decimal('0')
+    else:
+        sgst = (subtotal * Decimal('0.09')).quantize(Decimal("0.01")); cgst = (subtotal * Decimal('0.09')).quantize(Decimal("0.01")); igst = Decimal('0')
+
+    total = (subtotal + sgst + cgst + igst).quantize(Decimal("0.01"))
+    net = (total - adv).quantize(Decimal("0.01"))
+
+    totals = [["Sub Total", Paragraph(f"Rs. {subtotal:,.2f}", right_style)]]
+    if use_igst:
+        totals.append(["IGST (18%)", Paragraph(f"Rs. {igst:,.2f}", right_style)])
+    else:
+        totals.append(["SGST (9%)", Paragraph(f"Rs. {sgst:,.2f}", right_style)])
+        totals.append(["CGST (9%)", Paragraph(f"Rs. {cgst:,.2f}", right_style)])
+    if adv > 0:
+        totals.append(["Less Advance Received", Paragraph(f"Rs. {adv:,.2f}", right_style)])
+    totals.append(["TOTAL", Paragraph(f"Rs. {net:,.2f}", right_style)])
+
+    tot_tbl = Table(totals, colWidths=[page_width*0.65, page_width*0.35], hAlign='RIGHT')
+    tot_tbl.setStyle(TableStyle([('GRID',(0,0),(-1,-1),0.25,colors.grey), ('ALIGN',(1,0),(1,-1),'RIGHT'), ('BACKGROUND',(0,-1),(-1,-1),colors.whitesmoke)]))
+    story.append(tot_tbl)
+    story.append(Spacer(1,8))
+
+    # In words
+    story.append(Paragraph(f"In Words : ( {rupees_in_words(net)} )", body_style))
+    story.append(Spacer(1,12))
+
+    # Signature
+    if COMPANY.get('signature') and os.path.exists(COMPANY.get('signature')):
+        sig = Image(COMPANY['signature'], width=44.6*mm, height=31.3*mm); sig.hAlign='LEFT'
+        story.append(KeepTogether([sig, Spacer(1,4), Paragraph("For Crux Management Services (P) Ltd<br/><br/>Authorised Signatory", styles['Normal'])]))
+    else:
+        story.append(Paragraph("For Crux Management Services (P) Ltd<br/><br/>Authorised Signatory", styles['Normal']))
+
+    story.append(Spacer(1,10))
+    story.append(HR(page_width, thickness=0.5, color=colors.grey))
+    footer = COMPANY['address'] + " | Phone: " + COMPANY['phone'] + " | Email: " + COMPANY['email'] + " | " + APP_BUILT_BY
+    story.append(Paragraph(footer, styles['footer']))
+
+    # Supporting DataFrame: improved splitting & wrapping
+    if supporting_df is not None and not supporting_df.empty:
+        try:
+            df = supporting_df.fillna("").astype(str)
+            n_cols = len(df.columns)
+            max_cols_per_chunk = 10  # tweakable
+            chunks = [df.columns[i:i+max_cols_per_chunk] for i in range(0, n_cols, max_cols_per_chunk)]
+
+            story.append(PageBreak())
+            story.append(Paragraph("Supporting Documents / Excel data", styles['Heading2']))
+            story.append(Spacer(1,6))
+
+            for idx_chunk, cols_chunk in enumerate(chunks):
+                cols_count = len(cols_chunk)
+                if cols_count <= 5:
+                    font_size = 8
+                elif cols_count <= 8:
+                    font_size = 7
+                else:
+                    font_size = 6
+
+                sup_style = ParagraphStyle(name=f"sup_{idx_chunk}", fontSize=font_size, leading=max(font_size+1,7))
+                hdr_style = ParagraphStyle(name=f"hdr_{idx_chunk}", fontSize=font_size, leading=max(font_size+1,7), alignment=1)
+
+                min_col_width = 18*mm
+                default_w = page_width / cols_count
+                col_widths = [max(default_w, min_col_width) for _ in cols_chunk]
+                totalw = sum(col_widths)
+                if totalw > page_width:
+                    scale = page_width / totalw
+                    col_widths = [w * scale for w in col_widths]
+
+                table_data = []
+                header_row = [Paragraph(str(c), hdr_style) for c in cols_chunk]
+                table_data.append(header_row)
+
+                for _, row in df.iterrows():
+                    row_cells = []
+                    for c in cols_chunk:
+                        text = " ".join(str(row[c]).split())
+                        row_cells.append(Paragraph(text, sup_style))
+                    table_data.append(row_cells)
+
+                sup_tbl = Table(table_data, colWidths=col_widths, repeatRows=1, hAlign='LEFT')
+                sup_tbl.setStyle(TableStyle([
+                    ('GRID',(0,0),(-1,-1),0.25,colors.grey),
+                    ('BACKGROUND',(0,0),(-1,0),colors.whitesmoke),
+                    ('VALIGN',(0,0),(-1,-1),'TOP'),
+                    ('LEFTPADDING',(0,0),(-1,-1),4),
+                    ('RIGHTPADDING',(0,0),(-1,-1),4),
+                    ('TOPPADDING',(0,0),(-1,-1),4),
+                    ('BOTTOMPADDING',(0,0),(-1,-1),4),
+                ]))
+
+                story.append(sup_tbl)
+                story.append(Spacer(1,8))
+                if idx_chunk != len(chunks)-1:
+                    story.append(Spacer(1,6))
+
+        except Exception as e:
+            story.append(Paragraph("Error rendering supporting sheet: " + str(e), styles['wrap']))
+
     doc.build(story)
     return path
 
 # ---------------- Authentication UI ----------------
 def check_password():
     """
-    Simple password gate. Password read from streamlit secrets [app].password
-    or from environment APP_PASSWORD.
-    Stores auth state in st.session_state['authenticated'].
+    Password gate. Password from st.secrets['app']['password'] or env APP_PASSWORD.
+    Adds a sidebar select_slider for logout when authenticated.
     """
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
 
-    if st.session_state.authenticated:
-        _, right, _ = st.columns([1,2,1])
-        with right:
-            if st.button("Logout"):
-                st.session_state.authenticated = False
-                safe_rerun()
+    # sidebar logout slider (visible only when authenticated)
+    if st.session_state.get("authenticated"):
+        val = st.sidebar.select_slider("Session", options=["Stay Logged In", "Logout"], value="Stay Logged In")
+        if val == "Logout":
+            st.session_state.authenticated = False
+            safe_rerun()
+        # show a small logout control also top-right
+        cols = st.columns([1,2,1])
+        with cols[1]:
+            st.markdown("**Logged in**")
         return True
 
     st.write("**Enter password to continue**")
     pwd = st.text_input("Password", type="password")
     if st.button("Login"):
-        # get password from secrets or env
         password = None
         try:
             password = st.secrets["app"]["password"]
@@ -305,9 +503,9 @@ def main():
     st.caption(APP_BUILT_BY)
     init_db()
 
-    # Authentication gate
+    # Authentication
     if not check_password():
-        return  # don't render the rest until logged in
+        return
 
     mode = st.sidebar.selectbox("Mode", ["Manage Clients", "Create Invoice", "History"])
 
@@ -319,14 +517,13 @@ def main():
             dfc = pd.DataFrame(clients, columns=['id','name','gstin','address','email'])
             st.dataframe(dfc[['name','gstin','address']])
 
-        # -- Add client with a stable st.form (always commits on submit) --
+        # Add new client form
         st.subheader("Add New Client")
         with st.form("add_client_form"):
             gstin_input = st.text_input("GSTIN", value="", max_chars=15)
             name = st.text_input("Company Name")
             pan = st.text_input("PAN (optional)")
             address = st.text_area("Address")
-            # we intentionally do not ask client email as per your request
             submitted = st.form_submit_button("Save Client")
             if submitted:
                 if not name:
@@ -336,35 +533,41 @@ def main():
                     st.success("Client saved")
                     safe_rerun()
 
-        # -- Fetch from GST API and let user save (separate small form) --
+        # Fetch from GST API (not inside a form to avoid nesting)
         st.subheader("Fetch from GST API (optional)")
-        with st.form("fetch_gst_form"):
-            gst_fetch = st.text_input("GSTIN to fetch", value="")
-            fetch_btn = st.form_submit_button("Fetch")
-            if fetch_btn:
-                if not gst_fetch.strip():
-                    st.error("Enter GSTIN first")
-                else:
-                    with st.spinner("Fetching from GST API..."):
-                        res = fetch_gst_from_appyflow(gst_fetch)
-                    if res.get("ok"):
-                        st.success("Fetched details below — click Save to store client")
-                        # prefill fields in another nested form for saving fetched data
-                        with st.form("save_fetched"):
-                            name_f = st.text_input("Company Name", value=res.get("name",""))
-                            address_f = st.text_area("Address", value=res.get("address",""))
-                            gstin_f = st.text_input("GSTIN", value=res.get("gstin", gst_fetch))
-                            pan_f = st.text_input("PAN (auto)", value=res.get("pan","") or "")
-                            save_f = st.form_submit_button("Save Fetched Client")
-                            if save_f:
-                                if not name_f:
-                                    st.error("Name required")
-                                else:
-                                    add_client(name_f, gstin_f, pan_f, address_f, email="")
-                                    st.success("Client saved (from API)")
-                                    safe_rerun()
-                    else:
-                        st.error(f"API error: {res.get('error')}")
+        gst_fetch = st.text_input("GSTIN to fetch (for auto-fill)", value="", key="gst_fetch_input")
+        if st.button("Fetch GST Details"):
+            if not gst_fetch.strip():
+                st.error("Enter GSTIN first")
+            else:
+                with st.spinner("Fetching from GST API..."):
+                    res = fetch_gst_from_appyflow(gst_fetch)
+                st.session_state._last_gst_fetch = res
+
+        # If a fetch result exists, show save form (not nested)
+        last = st.session_state.get("_last_gst_fetch")
+        if last:
+            if last.get("ok"):
+                st.success("Fetched. Verify below and click Save.")
+                with st.form("save_fetched_form"):
+                    name_f = st.text_input("Company Name", value=last.get("name",""))
+                    address_f = st.text_area("Address", value=last.get("address",""))
+                    gstin_f = st.text_input("GSTIN", value=last.get("gstin",""))
+                    pan_f = st.text_input("PAN (auto)", value=last.get("pan","") or "")
+                    save_f = st.form_submit_button("Save Fetched Client")
+                    if save_f:
+                        if not name_f:
+                            st.error("Name required")
+                        else:
+                            add_client(name_f, gstin_f, pan_f, address_f, email="")
+                            st.success("Client saved (from API)")
+                            # clear cached fetch
+                            st.session_state._last_gst_fetch = None
+                            safe_rerun()
+            else:
+                st.error(f"Fetch error: {last.get('error')}")
+                # clear after showing
+                st.session_state._last_gst_fetch = None
 
         # Edit / Delete existing clients
         st.subheader("Edit / Delete Client")
@@ -424,7 +627,6 @@ def main():
                 {"slno":1,"particulars":"DEGREE","description":"Commercial Training And Coaching Services","sac_code":"999293","qty":1,"rate":100,"taxable_amount":100}
             ]
 
-        # Add / edit rows UI (keeps previous behavior, but using session_state)
         if st.button("Add New Row"):
             st.session_state.rows.append({"slno": len(st.session_state.rows)+1, "particulars":"", "description":"", "sac_code":"", "qty":0, "rate":0, "taxable_amount":0})
             safe_rerun()

@@ -283,7 +283,6 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     # Header images: user-provided sizes
     add_image_if(COMPANY.get('logo_top'), w_mm=87, h_mm=25.2, align='CENTER', spacer_after=2)
     add_image_if(COMPANY.get('tagline'), w_mm=164.8, h_mm=5.4, align='CENTER', spacer_after=6)
-    add_image_if(COMPANY.get('company_text'), w_mm=177, h_mm=27.2, align='CENTER', spacer_after=6)
 
     # Title row
     story.append(Paragraph("INVOICE", title_style))
@@ -441,9 +440,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     story.append(Spacer(1,10))
 
     # Footer: only company contact (no APP_BUILT_BY)
-    footer_text = f"{COMPANY.get('address','')} | Phone: {COMPANY.get('phone','')} | Email: {COMPANY.get('email','')}"
-    story.append(Spacer(1,6))
-    story.append(Paragraph(footer_text, ParagraphStyle('ftr', fontSize=7, alignment=1, leading=8)))
+   add_image_if(COMPANY.get('company_text'), w_mm=177, h_mm=27.2, align='CENTER', spacer_after=6)
 
     # Supporting dataframe - add on new page(s) if provided
     if supporting_df is not None and not supporting_df.empty:

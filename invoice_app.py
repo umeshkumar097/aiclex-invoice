@@ -1,4 +1,3 @@
-# invoice_app.py
 import streamlit as st
 import sqlite3
 from datetime import date, datetime
@@ -8,7 +7,10 @@ import os
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import mm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, PageBreak, Flowable
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer,
+    Table, TableStyle, Image, PageBreak, Flowable
+)
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 # ---------- Styles ----------
@@ -22,7 +24,7 @@ DB_PATH = "invoices.db"
 PDF_DIR = "generated_pdfs"
 os.makedirs(PDF_DIR, exist_ok=True)
 
-# Fixed company details (CRUX template) with asset paths (ensure assets/*.jpeg exist)
+# Fixed company details (CRUX template) with asset paths
 COMPANY = {
     "name": "CRUX MANAGEMENT SERVICES (P) LTD",
     "gstin": "36AABCC4754D1ZX",
@@ -118,7 +120,7 @@ def delete_client(cid):
     conn.commit()
     conn.close()
 
-# Small horizontal rule flowable
+# ---------- Custom horizontal rule ----------
 class HR(Flowable):
     def __init__(self, width, thickness=1, color=colors.black):
         Flowable.__init__(self)
@@ -137,7 +139,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     doc = SimpleDocTemplate(path, pagesize=A4, rightMargin=15*mm, leftMargin=15*mm, topMargin=15*mm, bottomMargin=15*mm)
     story = []
 
-    # Top logo (left)
+    # Top logo
     try:
         if os.path.exists(COMPANY['logo_top']):
             img = Image(COMPANY['logo_top'], width=70*mm, height=25*mm)
@@ -146,7 +148,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     except Exception:
         pass
 
-    # Tagline (center)
+    # Tagline image
     try:
         if os.path.exists(COMPANY['tagline']):
             img2 = Image(COMPANY['tagline'], width=180*mm, height=8*mm)
@@ -157,6 +159,8 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
 
     story.append(Spacer(1,4))
     story.append(Paragraph("<b>CRUX MANAGEMENT SERVICES</b>", ParagraphStyle('h1', fontSize=14, alignment=1)))
+
+    # Address and contact block
     right_block = COMPANY['address'].replace("\n", "<br/>") + "<br/>Phone: " + COMPANY['phone'] + "<br/>email:" + COMPANY['email']
     top_table = Table([[Paragraph("", styles['Normal']), Paragraph(right_block, styles['Normal'])]], colWidths=[100*mm, 70*mm])
     top_table.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP')]))
@@ -165,7 +169,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     story.append(HR(170*mm, thickness=1, color=colors.black))
     story.append(Spacer(1,6))
 
-    # Invoice header: client left, invoice+bank right
+    # Invoice header
     client = invoice_meta['client'] or {}
     left_lines = [
         f"To: {client.get('name','')}",
@@ -192,7 +196,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     story.append(inv_table)
     story.append(Spacer(1,8))
 
-    # Line items table
+    # Line items
     header = ["S.NO", "PARTICULARS", "DESCRIPTION of SAC CODE", "SAC CODE", "QTY", "RATE", "TAXABLE AMOUNT"]
     table_data = [header]
     for li in line_items:
@@ -248,27 +252,36 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     story.append(Paragraph(f"In Words : ( {rupees_in_words(total)} )", styles['Normal']))
     story.append(Spacer(1,18))
 
-    # Signature area
-    sig_parts = []
-    try:
-        if os.path.exists(COMPANY['signature']):
+    # ---------- FIXED SIGNATURE SECTION ----------
+    sig_img = None
+    if os.path.exists(COMPANY.get('signature', '')):
+        try:
             sig_img = Image(COMPANY['signature'], width=40*mm, height=40*mm)
             sig_img.hAlign = 'LEFT'
-            sig_parts.append(sig_img)
-    except Exception:
-        pass
-    sig_parts.append(Paragraph("For Crux Management Services (P) Ltd<br/><br/>Authorised Signatory", styles['Normal']))
-    sig_table = Table([[sig_parts[0] if len(sig_parts)>0 else "", sig_parts[1]]], colWidths=[50*mm, 120*mm])
-    sig_table.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE')]))
-    story.append(sig_table)
-    story.append(Spacer(1,12))
+        except Exception as e:
+            st.warning(f"Could not load signature image: {e}")
 
+    sig_text = Paragraph(
+        "For Crux Management Services (P) Ltd<br/><br/>Authorised Signatory",
+        styles['Normal']
+    )
+
+    if sig_img:
+        sig_table = Table([[sig_img, sig_text]], colWidths=[50*mm, 120*mm])
+    else:
+        sig_table = Table([["", sig_text]], colWidths=[50*mm, 120*mm])
+
+    sig_table.setStyle(TableStyle([('VALIGN', (0, 0), (-1, -1), 'MIDDLE')]))
+    story.append(sig_table)
+    story.append(Spacer(1, 12))
+
+    # Footer
     story.append(HR(170*mm, thickness=0.5, color=colors.grey))
     footer = COMPANY['address'] + " | Phone: " + COMPANY['phone'] + " | email: " + COMPANY['email']
     story.append(Paragraph(footer, ParagraphStyle('foot', fontSize=8, alignment=1)))
     story.append(Spacer(1,6))
 
-    # Supporting data as extra page
+    # Supporting sheet
     if supporting_df is not None and not supporting_df.empty:
         story.append(PageBreak())
         story.append(Paragraph("Supporting Documents / Excel data", styles['Heading2']))
@@ -285,8 +298,8 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
 
 # ---------- Streamlit UI ----------
 def main():
-    st.set_page_config(page_title="Invoice System - CRUX Template (v2)", layout="wide")
-    st.title("Invoice System — CRUX Template (v2)")
+    st.set_page_config(page_title="Invoice System - CRUX Template", layout="wide")
+    st.title("Invoice System — CRUX Template (Fixed Signature)")
 
     init_db()
 
@@ -335,33 +348,28 @@ def main():
         st.header("Create Invoice")
         clients = get_clients()
         clients_map = {f"{c[1]} ({c[2]})": c[0] for c in clients}
-        client_sel = st.selectbox("Select Client (choose or add in sidebar)", options=["--select--"] + list(clients_map.keys()))
+        client_sel = st.selectbox("Select Client", options=["--select--"] + list(clients_map.keys()))
         client_info = None
         if client_sel != "--select--":
             cid = clients_map[client_sel]
             rec = get_client_by_id(cid)
             if rec:
-                c = {"id": rec[0], "name": rec[1], "gstin": rec[2], "pan": rec[3], "address": rec[4], "email": rec[5]}
-                client_info = c
+                client_info = {"id": rec[0], "name": rec[1], "gstin": rec[2], "pan": rec[3], "address": rec[4], "email": rec[5]}
 
         st.subheader("Invoice Header")
         col1, col2 = st.columns(2)
         with col1:
             invoice_no = st.text_input("Invoice No", value=f"INV{int(datetime.now().timestamp())}")
             invoice_date = st.date_input("Invoice Date", value=date.today())
-            payment_mode = st.selectbox("Payment Mode", ["Bank","UPI","Cash"])
         with col2:
-            bank_details = st.text_area("Bank / Remittance Details (optional)")
+            payment_mode = st.selectbox("Payment Mode", ["Bank","UPI","Cash"])
             training_dates = st.text_input("Training/Exam Dates (optional)")
 
-        st.subheader("Invoice Line Items (template rows)")
+        st.subheader("Line Items")
         if "rows" not in st.session_state:
             st.session_state.rows = [
                 {"slno":1,"particulars":"DEGREE","description":"Commercial Training And Coaching Services","sac_code":"999293","qty":1,"rate":100,"taxable_amount":100},
                 {"slno":2,"particulars":"NON DEGREE","description":"Commercial Training And Coaching Services","sac_code":"999293","qty":2,"rate":101,"taxable_amount":202},
-                {"slno":3,"particulars":"NO OF CANDIDATES","description":"Commercial Training And Coaching Services","sac_code":"999293","qty":3,"rate":102,"taxable_amount":306},
-                {"slno":4,"particulars":"EXAM FEE","description":"Commercial Training And Coaching Services","sac_code":"999293","qty":4,"rate":103,"taxable_amount":412},
-                {"slno":5,"particulars":"HAND BOOKS","description":"Commercial Training And Coaching Services","sac_code":"999293","qty":5,"rate":104,"taxable_amount":520},
             ]
 
         if st.button("Add Row"):
@@ -378,75 +386,45 @@ def main():
             r['rate'] = cols[5].number_input("Rate", value=float(r.get('rate',0)), min_value=0.0, key=f"r{idx}")
             r['taxable_amount'] = r['qty'] * r['rate']
             cols[6].write(f"Taxable: {r['taxable_amount']:.2f}")
-            if cols[6].button("Remove", key=f"rm{idx}"):
-                st.session_state.rows.pop(idx)
-                st.experimental_rerun()
 
+        use_igst = st.checkbox("Use IGST (18%)", value=False)
         advance_received = st.number_input("Advance Received (if any)", min_value=0.0, value=0.0)
-        use_igst = st.checkbox("Use IGST (18%) instead of SGST+CGST", value=False)
 
-        st.subheader("Upload Supporting Excel (will be appended to PDF)")
-        uploaded_file = st.file_uploader("Upload Excel (.xlsx/.xls/.csv)", type=["xlsx","xls","csv"])
+        uploaded_file = st.file_uploader("Upload Supporting Excel (.xlsx/.csv)", type=["xlsx","csv"])
         supporting_df = None
-        if uploaded_file is not None:
+        if uploaded_file:
             try:
-                if uploaded_file.name.lower().endswith(".csv"):
+                if uploaded_file.name.endswith(".csv"):
                     supporting_df = pd.read_csv(uploaded_file)
                 else:
                     supporting_df = pd.read_excel(uploaded_file)
-                st.write("Preview of supporting data:")
                 st.dataframe(supporting_df.head())
             except Exception as e:
-                st.error("Error reading file: " + str(e))
-                supporting_df = None
+                st.error(f"Error reading file: {e}")
 
-        st.write("---")
         subtotal = sum([r['taxable_amount'] for r in st.session_state.rows]) - advance_received
         if subtotal < 0:
             subtotal = 0
-        if use_igst:
-            igst = subtotal * 0.18
-            sgst = cgst = 0
-        else:
-            sgst = subtotal * 0.09
-            cgst = subtotal * 0.09
-            igst = 0
+        sgst = subtotal*0.09 if not use_igst else 0
+        cgst = subtotal*0.09 if not use_igst else 0
+        igst = subtotal*0.18 if use_igst else 0
         total = subtotal + sgst + cgst + igst
 
-        st.metric("Subtotal", f"₹{subtotal:.2f}")
-        st.metric("SGST", f"₹{sgst:.2f}")
-        st.metric("CGST", f"₹{cgst:.2f}")
-        if igst:
-            st.metric("IGST", f"₹{igst:.2f}")
-        st.metric("Total", f"₹{total:.2f}")
+        st.metric("Total Amount", f"₹{total:.2f}")
         st.write("In words:", rupees_in_words(total))
 
         if st.button("Generate PDF Invoice"):
-            if client_info is None:
-                st.error("Select a client first (or add one in Manage Clients).")
+            if not client_info:
+                st.error("Select a client first.")
             else:
                 invoice_meta = {
                     "invoice_no": invoice_no,
                     "invoice_date": invoice_date.strftime("%d-%m-%Y"),
                     "client": client_info,
-                    "payment_mode": payment_mode,
-                    "bank_details": bank_details,
-                    "training_dates": training_dates,
                     "use_igst": use_igst,
                     "tax_rate": 0.18
                 }
-                line_items = []
-                for r in st.session_state.rows:
-                    line_items.append({
-                        "slno": r.get('slno'),
-                        "particulars": r.get('particulars'),
-                        "description": r.get('description'),
-                        "sac_code": r.get('sac_code'),
-                        "qty": r.get('qty'),
-                        "rate": r.get('rate'),
-                        "taxable_amount": r.get('taxable_amount')
-                    })
-                pdf_path = generate_invoice_pdf(invoice_meta, line_items, supporting_df=supporting_df)
+                pdf_path = generate_invoice_pdf(invoice_meta, st.session_state.rows, supporting_df)
                 conn = sqlite3.connect(DB_PATH)
                 cur = conn.cursor()
                 cur.execute("INSERT INTO invoices (invoice_no, invoice_date, client_id, subtotal, sgst, cgst, igst, total, pdf_path) VALUES (?,?,?,?,?,?,?,?,?)",
@@ -455,14 +433,14 @@ def main():
                 conn.close()
                 st.success(f"PDF generated: {pdf_path}")
                 with open(pdf_path, "rb") as f:
-                    st.download_button("Download PDF", data=f, file_name=os.path.basename(pdf_path), mime="application/pdf")
+                    st.download_button("Download PDF", f, file_name=os.path.basename(pdf_path), mime="application/pdf")
+
     else:
-        st.header("Invoices (History)")
+        st.header("Invoice History")
         conn = sqlite3.connect(DB_PATH)
-        df = pd.read_sql_query("SELECT id, invoice_no, invoice_date, client_id, total, pdf_path FROM invoices ORDER BY id DESC", conn)
-        clients = {c[0]:c[1] for c in get_clients()}
-        df['client'] = df['client_id'].apply(lambda x: clients.get(x, "Unknown"))
-        st.dataframe(df[['invoice_no','invoice_date','client','total']])
+        df = pd.read_sql_query("SELECT * FROM invoices ORDER BY id DESC", conn)
+        conn.close()
+        st.dataframe(df)
 
 if __name__ == "__main__":
     main()

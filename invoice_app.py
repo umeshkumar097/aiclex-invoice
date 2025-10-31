@@ -31,7 +31,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 # ---------------- App constants ----------------
 APP_TITLE = "Crux Invoice Management System"
-APP_BUILT_BY = "Built by Aiclex Technologies"
+APP_BUILT_BY = "Built by Aiclex Technologies"  # kept for app UI, but NOT used in PDF footer
 DB_PATH = "invoices.db"
 PDF_DIR = "generated_pdfs"
 os.makedirs(PDF_DIR, exist_ok=True)
@@ -214,21 +214,23 @@ class HR(Flowable):
         self.canv.setStrokeColor(self.color)
         self.canv.line(0,0,self.width,0)
 
-# ---------------- PDF generation (use your improved function here) ----------------
-# For brevity, add the improved generate_invoice_pdf function from earlier messages.
-# (Paste the full generate_invoice_pdf implementation you prefer here.)
+# ---------------- PDF generation (modified footer — NO APP_BUILT_BY) ----------------
 def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
-    # Minimal PDF generator (replace with your improved function if you have it)
+    # Minimal PDF generator with explicit footer that DOES NOT include APP_BUILT_BY
     from decimal import Decimal, ROUND_HALF_UP
     filename = f"Invoice_{invoice_meta.get('invoice_no','NA')}_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
     path = os.path.join(PDF_DIR, filename)
     doc = SimpleDocTemplate(path, pagesize=A4, leftMargin=15*mm, rightMargin=15*mm, topMargin=15*mm, bottomMargin=15*mm)
     story = []
+
+    # header
     story.append(Paragraph("INVOICE (Sample)", styles['title_center']))
     story.append(Spacer(1,12))
     story.append(Paragraph(f"Invoice No: {invoice_meta.get('invoice_no')}", styles['wrap']))
     story.append(Paragraph(f"Client: {invoice_meta.get('client',{}).get('name','')}", styles['wrap']))
     story.append(Spacer(1,12))
+
+    # items table
     data = [["S.No","Particulars","Qty","Rate","Amount"]]
     for r in line_items:
         amt = float(r.get('qty',0)) * float(r.get('rate',0))
@@ -236,6 +238,13 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     t = Table(data)
     t.setStyle(TableStyle([('GRID',(0,0),(-1,-1),0.25,colors.black)]))
     story.append(t)
+    story.append(Spacer(1,12))
+
+    # Footer: ONLY company contact — removed APP_BUILT_BY here
+    footer_text = f"{COMPANY.get('address','')} | Phone: {COMPANY.get('phone','')} | Email: {COMPANY.get('email','')}"
+    story.append(Spacer(1,20))
+    story.append(Paragraph(footer_text, styles['footer']))
+
     doc.build(story)
     return path
 
@@ -395,6 +404,7 @@ def check_password():
 def main():
     st.set_page_config(page_title=APP_TITLE, layout="wide")
     st.title(APP_TITLE)
+    # keep the app caption in UI but PDF footer no longer contains APP_BUILT_BY
     st.caption(APP_BUILT_BY)
     init_db()
 

@@ -3,8 +3,11 @@
 # Built by Aiclex Technologies
 #
 # Notes:
-# - Images expected in assets/ as .jpg (not .jpeg)
-#   logo_top.jpg, company_text.jpg, tagline.jpg, signature_stamp.jpg
+# - Images expected in assets/ as .jpg:
+#     assets/logo_top.jpg
+#     assets/company_text.jpg
+#     assets/tagline.jpg
+#     assets/signature_stamp.jpg
 # - Appyflow GST API key should be stored in .streamlit/secrets.toml:
 #     [appyflow]
 #     key_secret = "YOUR_APPYFLOW_KEY_SECRET"
@@ -57,7 +60,7 @@ COMPANY = {
 
 # ---------------- Styles ----------------
 styles = getSampleStyleSheet()
-styles.add(ParagraphStyle(name='wrap', fontSize=8, leading=10))
+styles.add(ParagraphStyle(name='wrap', fontSize=9, leading=11))
 styles.add(ParagraphStyle(name='footer', fontSize=7, alignment=1, leading=9))
 
 # ---------------- Helpers ----------------
@@ -90,7 +93,7 @@ def gst_state_code(gstin):
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    # Keep email column in DB for backward compatibility but we will not ask on add
+    # Keep email column for compatibility but we won't ask on add
     cur.execute("""
         CREATE TABLE IF NOT EXISTS clients (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -207,63 +210,121 @@ class HR(Flowable):
         self.canv.setStrokeColor(self.color)
         self.canv.line(0,0,self.width,0)
 
-# ---------------- PDF generation ----------------
+# ---------------- PDF generation (new layout requested) ----------------
 def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
+    """
+    Layout implemented as requested:
+    - Top: logo (center) then tagline (center)
+    - Next row: centered big "INVOICE"
+    - Next row: left = CRUX GSTIN, right = PAN
+    - Next: two boxes side-by-side:
+        * Left: client details (Name, Address, GSTIN)
+        * Right: seller details; top of right box has INV No and Date, below that seller info including PAN & bank
+    - Spacer, then items table, totals, amount in words, signature, footer, supporting docs page
+    """
+    from decimal import Decimal, ROUND_HALF_UP
+
+    def q(v):
+        return Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
     filename = f"Invoice_{invoice_meta.get('invoice_no','NA')}_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
     path = os.path.join(PDF_DIR, filename)
 
-    doc = SimpleDocTemplate(path, pagesize=A4, leftMargin=15*mm, rightMargin=15*mm, topMargin=15*mm, bottomMargin=15*mm)
+    doc = SimpleDocTemplate(path,
+                            pagesize=A4,
+                            rightMargin=15*mm, leftMargin=15*mm,
+                            topMargin=15*mm, bottomMargin=15*mm)
+
     story = []
-    wrap = styles['wrap']
-    footer = styles['footer']
     page_width = A4[0] - (15*mm + 15*mm)
+    wrap = ParagraphStyle('wrap', fontSize=9, leading=11)
+    title_style = ParagraphStyle('title', fontSize=18, alignment=1, leading=22, spaceAfter=6)
+    right_small = ParagraphStyle('right_small', fontSize=9, alignment=2, leading=11)
 
-    def safe_img(path, w, h, align='CENTER'):
-        if path and os.path.exists(path):
-            img = Image(path, width=w, height=h); img.hAlign = align; story.append(img)
+    # 1) Logo (center)
+    try:
+        logo_path = COMPANY.get('logo_top')
+        if logo_path and os.path.exists(logo_path):
+            logo = Image(logo_path, width=87*mm, height=25.2*mm)
+            logo.hAlign = 'CENTER'
+            story.append(logo)
+    except Exception:
+        pass
+    story.append(Spacer(1, 4))
 
-    # logo top (87mm x 25.2mm)
-    safe_img(COMPANY.get('logo_top'), 87*mm, 25.2*mm, align='CENTER')
-    story.append(Spacer(1,4))
+    # Tagline (center)
+    try:
+        tagline_path = COMPANY.get('tagline')
+        if tagline_path and os.path.exists(tagline_path):
+            tag = Image(tagline_path, width=164.8*mm, height=5.4*mm)
+            tag.hAlign = 'CENTER'
+            story.append(tag)
+    except Exception:
+        pass
+    story.append(Spacer(1, 8))
 
-    # company text (177mm x 27.2mm)
-    safe_img(COMPANY.get('company_text'), 177*mm, 27.2*mm, align='CENTER')
-    story.append(Spacer(1,4))
+    # 2) Big centered INVOICE row
+    story.append(Paragraph("INVOICE", title_style))
+    story.append(Spacer(1, 6))
 
-    # tagline (164.8mm x 5.4mm)
-    safe_img(COMPANY.get('tagline'), 164.8*mm, 5.4*mm, align='CENTER')
-    story.append(Spacer(1,8))
+    # 3) Two-part row: left -> CRUX GSTIN, right -> PAN
+    left_gst = f"<b>CRUX GSTIN:</b> {COMPANY.get('gstin','')}"
+    right_pan = f"<b>PAN:</b> {COMPANY.get('pan','')}"
+    gst_pan_table = Table([[Paragraph(left_gst, wrap), Paragraph(right_pan, right_small)]],
+                           colWidths=[page_width*0.5, page_width*0.5])
+    gst_pan_table.setStyle(TableStyle([
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('ALIGN', (1,0), (1,0), 'RIGHT'),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+    ]))
+    story.append(gst_pan_table)
+    story.append(Spacer(1, 6))
 
-    address_block = COMPANY['address'] + "<br/>Phone: " + COMPANY['phone'] + "<br/>Email: " + COMPANY['email']
-    top_tbl = Table([[Paragraph("", wrap), Paragraph(address_block, wrap)]], colWidths=[page_width*0.55, page_width*0.45])
-    top_tbl.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'), ('ALIGN',(1,0),(1,0),'RIGHT')]))
-    story.append(top_tbl)
-    story.append(Spacer(1,6))
-    story.append(HR(page_width, thickness=1, color=colors.black))
-    story.append(Spacer(1,8))
-
+    # 4) Two boxes side by side
     client = invoice_meta.get('client', {}) or {}
     client_name = client.get('name','')
-    client_addr = client.get('address','')
+    client_address = client.get('address','')
     client_gstin = str(client.get('gstin','')).strip().upper()
 
-    left_html = "<br/>".join([f"<b>To:</b> {client_name}", client_addr, f"<b>GSTIN NO:</b> {client_gstin}"])
-    right_html = "<br/>".join([
-        f"<b>INVOICE NO.:</b> {invoice_meta.get('invoice_no','')}",
-        f"<b>DATE:</b> {invoice_meta.get('invoice_date','')}",
-        "<b>Vendor Electronic Remittance</b>",
-        f"Bank Name: {COMPANY['bank_name']}",
-        f"A/C No : {COMPANY['bank_account']}",
-        f"IFS Code : {COMPANY['ifsc']}",
-        f"Branch : {COMPANY['branch']}"
-    ])
+    left_html_lines = []
+    left_html_lines.append(f"<b>To:</b> {client_name}")
+    if client_address:
+        left_html_lines.append(client_address)
+    if client_gstin:
+        left_html_lines.append(f"<b>GSTIN:</b> {client_gstin}")
+    left_box_html = "<br/>".join(left_html_lines)
 
-    inv_tbl = Table([[Paragraph(left_html, wrap), Paragraph(right_html, wrap)]], colWidths=[page_width*0.55, page_width*0.45])
-    inv_tbl.setStyle(TableStyle([('BOX',(0,0),(-1,-1),0.5,colors.grey), ('INNERGRID',(0,0),(-1,-1),0.25,colors.grey), ('VALIGN',(0,0),(-1,-1),'TOP')]))
-    story.append(inv_tbl)
-    story.append(Spacer(1,10))
+    inv_no = invoice_meta.get('invoice_no','')
+    inv_date = invoice_meta.get('invoice_date','')
+    seller_lines_top = f"<b>Invoice No.:</b> {inv_no}<br/><b>Date:</b> {inv_date}"
+    seller_detail_lines = []
+    seller_detail_lines.append(f"<b>{COMPANY.get('name')}</b>")
+    seller_address = COMPANY.get('address','')
+    if seller_address:
+        seller_detail_lines.append(seller_address)
+    seller_detail_lines.append(f"<b>GSTIN:</b> {COMPANY.get('gstin','')}")
+    if COMPANY.get('pan'):
+        seller_detail_lines.append(f"<b>PAN:</b> {COMPANY.get('pan')}")
+    seller_detail_lines.append(f"Bank: {COMPANY.get('bank_name')} | A/C: {COMPANY.get('bank_account')}")
+    seller_details_html = "<br/>".join(seller_detail_lines)
+    right_box_content = f"{seller_lines_top}<br/><br/>{seller_details_html}"
 
-    # items
+    boxes_table = Table([[Paragraph(left_box_html, wrap), Paragraph(right_box_content, wrap)]],
+                        colWidths=[page_width*0.5, page_width*0.5])
+    boxes_table.setStyle(TableStyle([
+        ('BOX', (0,0), (-1,-1), 0.5, colors.grey),
+        ('INNERGRID', (0,0), (-1,-1), 0.25, colors.grey),
+        ('VALIGN',(0,0),(-1,-1),'TOP'),
+        ('LEFTPADDING', (0,0), (-1,-1), 6),
+        ('RIGHTPADDING', (0,0), (-1,-1), 6),
+    ]))
+    story.append(boxes_table)
+    story.append(Spacer(1, 8))
+
+    # 5) Empty row (spacer)
+    story.append(Spacer(1, 6))
+
+    # 6) Items table
     header = ["S.NO","PARTICULARS","DESCRIPTION of SAC CODE","SAC CODE","QTY","RATE","TAXABLE AMOUNT"]
     table_data = [header]
     for li in line_items:
@@ -281,8 +342,8 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
         ])
 
     col_widths = [14*mm, 48*mm, 70*mm, 22*mm, 14*mm, 22*mm, 30*mm]
-    items_table = Table(table_data, colWidths=col_widths, repeatRows=1, hAlign='LEFT')
-    items_table.setStyle(TableStyle([
+    items_tbl = Table(table_data, colWidths=col_widths, repeatRows=1, hAlign='LEFT')
+    items_tbl.setStyle(TableStyle([
         ('GRID',(0,0),(-1,-1),0.25,colors.black),
         ('BACKGROUND',(0,0),(-1,0),colors.whitesmoke),
         ('VALIGN',(0,0),(-1,-1),'TOP'),
@@ -292,18 +353,18 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
         ('LEFTPADDING',(0,0),(-1,-1),3),
         ('RIGHTPADDING',(0,0),(-1,-1),3),
     ]))
-    story.append(items_table)
-    story.append(Spacer(1,8))
+    story.append(items_tbl)
+    story.append(Spacer(1, 8))
 
-    # totals
+    # 7) Totals + amount in words
     subtotal = sum([Decimal(str(li.get('qty',0) or 0)) * Decimal(str(li.get('rate',0) or 0)) for li in line_items])
     subtotal = subtotal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     advance = Decimal(str(invoice_meta.get('advance_received', 0) or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     comp_state = gst_state_code(COMPANY.get('gstin',''))
-    client_state = gst_state_code(client.get('gstin',''))
+    cli_state = gst_state_code(client.get('gstin',''))
     use_igst = invoice_meta.get('use_igst', False)
-    if comp_state and client_state and comp_state != client_state:
+    if comp_state and cli_state and comp_state != cli_state:
         use_igst = True
 
     if use_igst:
@@ -329,32 +390,37 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
         totals_data.append(["Less Advance Received", Paragraph(f"Rs. {advance:,.2f}", wrap)])
     totals_data.append(["NET PAYABLE", Paragraph(f"Rs. {net_payable:,.2f}", wrap)])
 
-    totals_table = Table(totals_data, colWidths=[page_width*0.65, page_width*0.35], hAlign='RIGHT')
-    totals_table.setStyle(TableStyle([
+    totals_tbl = Table(totals_data, colWidths=[page_width*0.65, page_width*0.35], hAlign='RIGHT')
+    totals_tbl.setStyle(TableStyle([
         ('GRID',(0,0),(-1,-1),0.25,colors.grey),
         ('ALIGN',(1,0),(1,-1),'RIGHT'),
         ('BACKGROUND',(0,-1),(-1,-1),colors.whitesmoke),
     ]))
-    story.append(totals_table)
+    story.append(totals_tbl)
     story.append(Spacer(1,8))
 
     story.append(Paragraph(f"In Words : ( {rupees_in_words(net_payable)} )", wrap))
     story.append(Spacer(1,12))
 
-    # signature
-    if COMPANY.get('signature') and os.path.exists(COMPANY.get('signature')):
-        sig_img = Image(COMPANY['signature'], width=44.6*mm, height=31.3*mm)
-        sig_img.hAlign = 'LEFT'
-        story.append(KeepTogether([sig_img, Spacer(1,4), Paragraph("For Crux Management Services (P) Ltd<br/><br/>Authorised Signatory", styles['Normal'])]))
-    else:
+    # Signature area
+    try:
+        sigpath = COMPANY.get('signature','')
+        if sigpath and os.path.exists(sigpath):
+            sigimg = Image(sigpath, width=44.6*mm, height=31.3*mm)
+            sigimg.hAlign = 'LEFT'
+            story.append(KeepTogether([sigimg, Spacer(1,4), Paragraph("For Crux Management Services (P) Ltd<br/><br/>Authorised Signatory", styles['Normal'])]))
+        else:
+            story.append(Paragraph("For Crux Management Services (P) Ltd<br/><br/>Authorised Signatory", styles['Normal']))
+    except Exception:
         story.append(Paragraph("For Crux Management Services (P) Ltd<br/><br/>Authorised Signatory", styles['Normal']))
 
     story.append(Spacer(1,12))
     story.append(HR(page_width, thickness=0.5, color=colors.grey))
     footer_text = COMPANY['address'] + " | Phone: " + COMPANY['phone'] + " | Email: " + COMPANY['email'] + " | " + APP_BUILT_BY
-    story.append(Paragraph(footer_text, footer))
+    story.append(Paragraph(footer_text, styles['footer']))
+    story.append(Spacer(1,6))
 
-    # supporting df
+    # Supporting data page
     if supporting_df is not None and not supporting_df.empty:
         try:
             story.append(PageBreak())
@@ -364,7 +430,11 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
             for _, r in df.iterrows():
                 data.append(list(r.values))
             sup_tbl = Table(data, repeatRows=1)
-            sup_tbl.setStyle(TableStyle([('GRID',(0,0),(-1,-1),0.25,colors.grey), ('BACKGROUND',(0,0),(-1,0),colors.whitesmoke), ('FONTSIZE',(0,0),(-1,-1),8)]))
+            sup_tbl.setStyle(TableStyle([
+                ('GRID',(0,0),(-1,-1),0.25,colors.grey),
+                ('BACKGROUND',(0,0),(-1,0),colors.whitesmoke),
+                ('FONTSIZE',(0,0),(-1,-1),8)
+            ]))
             story.append(sup_tbl)
         except Exception:
             story.append(Paragraph("Error adding supporting sheet", wrap))
@@ -406,12 +476,12 @@ def main():
                             gstin = st.text_input("GSTIN", value=res.get("gstin", gstin_input))
                             pan = st.text_input("PAN (auto)", value=res.get("pan", "") or "")
                             # NOTE: We do NOT ask for client email per your request; DB column kept but left blank
-                            if st.button("Save Client"):
+                            if st.button("Save Client (Using fetched data)"):
                                 if not name:
                                     st.error("Name required")
                                 else:
                                     add_client(name, gstin, pan, address, email="")
-                                    st.success("Client saved (no email collected).")
+                                    st.success("Client saved")
                         else:
                             st.warning(f"API failed: {res.get('error')}. Fill manually below.")
                             name = st.text_input("Company Name")

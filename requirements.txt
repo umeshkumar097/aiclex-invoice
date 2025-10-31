@@ -1,0 +1,6 @@
+streamlit
+pandas
+reportlab
+num2words
+openpyxl
+python-dotenv

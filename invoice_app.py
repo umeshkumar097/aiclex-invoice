@@ -421,7 +421,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     if COMPANY.get('signature') and os.path.exists(COMPANY.get('signature')):
         try:
             sig = Image(COMPANY['signature'], width=44.6*mm, height=31.3*mm)
-            sig.hAlign = 'LEFT'
+            sig.hAlign = 'CENTER'
             story.append(sig)
             story.append(Spacer(1,4))
         except Exception:

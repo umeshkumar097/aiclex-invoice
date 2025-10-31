@@ -440,8 +440,9 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     story.append(Spacer(1,10))
 
     # Footer: only company contact (no APP_BUILT_BY)
-   add_image_if(COMPANY.get('company_text'), w_mm=177, h_mm=27.2, align='CENTER', spacer_after=6)
-
+   if COMPANY.get('company_text') and os.path.exists(COMPANY.get('company_text')):
+        add_image_if(COMPANY.get('company_text'), w_mm=177, h_mm=27.2, align='CENTER', spacer_after=4)
+    # (no plain footer text with "Built by Aiclex" or contact)
     # Supporting dataframe - add on new page(s) if provided
     if supporting_df is not None and not supporting_df.empty:
         try:

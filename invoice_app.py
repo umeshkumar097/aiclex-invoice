@@ -2,28 +2,20 @@
 # Crux Invoice Management System
 # Built by Aiclex Technologies
 #
-# Notes:
-# - Images expected in assets/ as .jpg:
-#     assets/logo_top.jpg
-#     assets/company_text.jpg
-#     assets/tagline.jpg
-#     assets/signature_stamp.jpg
-# - Appyflow GST API key should be stored in .streamlit/secrets.toml:
-#     [appyflow]
-#     key_secret = "YOUR_APPYFLOW_KEY_SECRET"
-# - This version DOES NOT ask for client email when adding a client (per request).
+# Images (jpg) expected in assets/:
+#  - assets/logo_top.jpg
+#  - assets/company_text.jpg
+#  - assets/tagline.jpg
+#  - assets/signature_stamp.jpg
 
 import streamlit as st
 import sqlite3
 from datetime import date, datetime
 import pandas as pd
-import os
-import traceback
-import requests
+import os, traceback, requests
 from num2words import num2words
 from decimal import Decimal, ROUND_HALF_UP
 
-# ReportLab
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import mm
@@ -40,7 +32,7 @@ DB_PATH = "invoices.db"
 PDF_DIR = "generated_pdfs"
 os.makedirs(PDF_DIR, exist_ok=True)
 
-# ---------------- Company & asset paths (use .jpg) ----------------
+# ---------------- Company & assets (jpg) ----------------
 COMPANY = {
     "name": "CRUX MANAGEMENT SERVICES (P) LTD",
     "gstin": "36AABCC4754D1ZX",
@@ -49,6 +41,8 @@ COMPANY = {
     "bank_name": "HDFC BANK",
     "bank_account": "00212320004244",
     "ifsc": "HDFC0000021",
+    "swift": "HDFCINBBHYD",
+    "micr": "500240002",
     "branch": "LAKDIKAPUL, HYD-004",
     "address": "#403, 4th Floor, Diamond Block, Lumbini Rockdale, Somajiguda, Hyderabad - 500082, Telangana",
     "email": "mailadmin@cruxmanagement.com",
@@ -61,6 +55,8 @@ COMPANY = {
 # ---------------- Styles ----------------
 styles = getSampleStyleSheet()
 styles.add(ParagraphStyle(name='wrap', fontSize=9, leading=11))
+styles.add(ParagraphStyle(name='title_center', fontSize=18, leading=20, alignment=1))
+styles.add(ParagraphStyle(name='small_right', fontSize=9, alignment=2))
 styles.add(ParagraphStyle(name='footer', fontSize=7, alignment=1, leading=9))
 
 # ---------------- Helpers ----------------
@@ -89,11 +85,10 @@ def gst_state_code(gstin):
     except:
         return None
 
-# ---------------- Database ----------------
+# ---------------- DB ----------------
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    # Keep email column for compatibility but we won't ask on add
     cur.execute("""
         CREATE TABLE IF NOT EXISTS clients (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -107,71 +102,55 @@ def init_db():
             subtotal REAL, sgst REAL, cgst REAL, igst REAL, total REAL, pdf_path TEXT
         )
     """)
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
 
 def get_clients():
     conn = sqlite3.connect(DB_PATH)
     rows = conn.execute("SELECT id,name,gstin,address,email FROM clients ORDER BY name").fetchall()
-    conn.close()
-    return rows
+    conn.close(); return rows
 
 def get_client_by_id(cid):
     conn = sqlite3.connect(DB_PATH)
     row = conn.execute("SELECT id,name,gstin,pan,address,email FROM clients WHERE id=?", (cid,)).fetchone()
-    conn.close()
-    return row
+    conn.close(); return row
 
-def add_client(name, gstin, pan, address, email=""):
+def add_client(name,gstin,pan,address,email=""):
     conn = sqlite3.connect(DB_PATH)
     conn.execute("INSERT INTO clients (name,gstin,pan,address,email) VALUES (?,?,?,?,?)", (name,gstin,pan,address,email))
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
 
-def update_client(cid, name, gstin, pan, address, email=""):
+def update_client(cid,name,gstin,pan,address,email=""):
     conn = sqlite3.connect(DB_PATH)
     conn.execute("UPDATE clients SET name=?,gstin=?,pan=?,address=?,email=? WHERE id=?", (name,gstin,pan,address,email,cid))
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
 
 def delete_client(cid):
     conn = sqlite3.connect(DB_PATH)
     conn.execute("DELETE FROM clients WHERE id=?", (cid,))
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
 
 # ---------------- GST API (Appyflow) ----------------
 def fetch_gst_from_appyflow(gstin, timeout=8):
     gstin = str(gstin).strip()
     if not gstin:
         return {"ok": False, "error": "Empty GSTIN"}
-
     key_secret = None
     try:
         key_secret = st.secrets["appyflow"]["key_secret"]
     except Exception:
         key_secret = os.getenv("APPYFLOW_KEY_SECRET")
-
     if not key_secret:
         return {"ok": False, "error": "API key missing in secrets."}
-
     url = "https://appyflow.in/api/verifyGST"
     params = {"key_secret": key_secret, "gstNo": gstin}
     try:
         r = requests.get(url, params=params, timeout=timeout)
-        r.raise_for_status()
-        j = r.json()
+        r.raise_for_status(); j = r.json()
     except Exception as e:
         return {"ok": False, "error": f"Request failed: {e}"}
-
-    # Parse API response (best-effort)
     if isinstance(j, dict) and ("taxpayerInfo" in j or j.get("error") is False):
         info = j.get("taxpayerInfo") or j.get("taxpayerinfo") or j.get("taxpayer") or j
-
-        # Name detection
         name = info.get("tradeNam") or info.get("lgnm") or info.get("tradeName") or info.get("name") or ""
-
-        # Address build (best-effort)
         addr = ""
         try:
             pradr = info.get("pradr", {}) or {}
@@ -184,16 +163,12 @@ def fetch_gst_from_appyflow(gstin, timeout=8):
             addr = ", ".join(parts)
         except:
             addr = ""
-
-        # PAN: try API fields then extract from GSTIN fallback
         pan = None
-        for pk in ("pan", "panno", "panNo", "PAN"):
+        for pk in ("pan","panno","panNo","PAN"):
             if info.get(pk):
-                pan = str(info.get(pk)).strip()
-                break
+                pan = str(info.get(pk)).strip(); break
         if not pan and len(gstin) >= 12:
             pan = gstin[2:12].upper()
-
         gstout = info.get("gstin") or gstin
         return {"ok": True, "name": name, "address": addr, "gstin": gstout, "pan": pan, "raw": j}
     else:
@@ -203,297 +178,220 @@ def fetch_gst_from_appyflow(gstin, timeout=8):
 # ---------------- HR flowable ----------------
 class HR(Flowable):
     def __init__(self, width, thickness=1, color=colors.black):
-        Flowable.__init__(self)
-        self.width = width; self.thickness = thickness; self.color = color
+        Flowable.__init__(self); self.width=width; self.thickness=thickness; self.color=color
     def draw(self):
-        self.canv.setLineWidth(self.thickness)
-        self.canv.setStrokeColor(self.color)
-        self.canv.line(0,0,self.width,0)
+        self.canv.setLineWidth(self.thickness); self.canv.setStrokeColor(self.color); self.canv.line(0,0,self.width,0)
 
-# ---------------- PDF generation (new layout requested) ----------------
+# ---------------- PDF generator (updated layout) ----------------
 def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
-    """
-    Layout implemented as requested:
-    - Top: logo (center) then tagline (center)
-    - Next row: centered big "INVOICE"
-    - Next row: left = CRUX GSTIN, right = PAN
-    - Next: two boxes side-by-side:
-        * Left: client details (Name, Address, GSTIN)
-        * Right: seller details; top of right box has INV No and Date, below that seller info including PAN & bank
-    - Spacer, then items table, totals, amount in words, signature, footer, supporting docs page
-    """
-    from decimal import Decimal, ROUND_HALF_UP
-
-    def q(v):
-        return Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
     filename = f"Invoice_{invoice_meta.get('invoice_no','NA')}_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
     path = os.path.join(PDF_DIR, filename)
-
-    doc = SimpleDocTemplate(path,
-                            pagesize=A4,
-                            rightMargin=15*mm, leftMargin=15*mm,
-                            topMargin=15*mm, bottomMargin=15*mm)
-
+    doc = SimpleDocTemplate(path, pagesize=A4, leftMargin=15*mm, rightMargin=15*mm, topMargin=15*mm, bottomMargin=15*mm)
     story = []
+    wrap = styles['wrap']
+    title = styles['title_center']
+    small_right = styles['small_right']
     page_width = A4[0] - (15*mm + 15*mm)
-    wrap = ParagraphStyle('wrap', fontSize=9, leading=11)
-    title_style = ParagraphStyle('title', fontSize=18, alignment=1, leading=22, spaceAfter=6)
-    right_small = ParagraphStyle('right_small', fontSize=9, alignment=2, leading=11)
 
-    # 1) Logo (center)
-    try:
-        logo_path = COMPANY.get('logo_top')
-        if logo_path and os.path.exists(logo_path):
-            logo = Image(logo_path, width=87*mm, height=25.2*mm)
-            logo.hAlign = 'CENTER'
-            story.append(logo)
-    except Exception:
-        pass
-    story.append(Spacer(1, 4))
+    def safe_img(path,w,h,align='CENTER'):
+        if path and os.path.exists(path):
+            img = Image(path,width=w,height=h); img.hAlign = align; story.append(img)
 
-    # Tagline (center)
-    try:
-        tagline_path = COMPANY.get('tagline')
-        if tagline_path and os.path.exists(tagline_path):
-            tag = Image(tagline_path, width=164.8*mm, height=5.4*mm)
-            tag.hAlign = 'CENTER'
-            story.append(tag)
-    except Exception:
-        pass
-    story.append(Spacer(1, 8))
+    # Top: logo then tagline
+    safe_img(COMPANY.get('logo_top'), 87*mm, 25.2*mm, align='CENTER'); story.append(Spacer(1,4))
+    safe_img(COMPANY.get('tagline'), 164.8*mm, 5.4*mm, align='CENTER'); story.append(Spacer(1,8))
 
-    # 2) Big centered INVOICE row
-    story.append(Paragraph("INVOICE", title_style))
-    story.append(Spacer(1, 6))
+    # INVOICE centered
+    story.append(Paragraph("INVOICE", title)); story.append(Spacer(1,6))
 
-    # 3) Two-part row: left -> CRUX GSTIN, right -> PAN
-    left_gst = f"<b>CRUX GSTIN:</b> {COMPANY.get('gstin','')}"
-    right_pan = f"<b>PAN:</b> {COMPANY.get('pan','')}"
-    gst_pan_table = Table([[Paragraph(left_gst, wrap), Paragraph(right_pan, right_small)]],
-                           colWidths=[page_width*0.5, page_width*0.5])
-    gst_pan_table.setStyle(TableStyle([
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-        ('ALIGN', (1,0), (1,0), 'RIGHT'),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
-    ]))
-    story.append(gst_pan_table)
-    story.append(Spacer(1, 6))
+    # Row: GST IN (left) and PAN NO (right)
+    gst_text = f"<b>GST IN :</b> {COMPANY.get('gstin','')}"
+    pan_text = f"<b>PAN NO :</b> {COMPANY.get('pan','')}"
+    gst_pan = Table([[Paragraph(gst_text, wrap), Paragraph(pan_text, small_right)]], colWidths=[page_width*0.6, page_width*0.4])
+    gst_pan.setStyle(TableStyle([('ALIGN',(1,0),(1,0),'RIGHT'), ('BOTTOMPADDING',(0,0),(-1,-1),6)]))
+    story.append(gst_pan); story.append(Spacer(1,8))
 
-    # 4) Two boxes side by side
+    # Big boxed area with two columns: Service Location (left) and Invoice+Vendor bank details (right)
     client = invoice_meta.get('client', {}) or {}
-    client_name = client.get('name','')
-    client_address = client.get('address','')
-    client_gstin = str(client.get('gstin','')).strip().upper()
+    left_lines = []
+    left_lines.append("<b>Service Location</b>")
+    left_lines.append("<br/>")
+    # "To M/s:" block
+    if client.get('name'):
+        left_lines.append(f"To M/s: {client.get('name')}")
+    if client.get('address'):
+        left_lines.append(client.get('address'))
+    left_lines.append("<br/>")
+    left_lines.append(f"<b>GSTIN NO:</b> {client.get('gstin','')}")
+    left_lines.append("<br/>")
+    left_lines.append("<b>PURCHASE ORDER</b>")
+    left_html = "<br/>".join(left_lines)
 
-    left_html_lines = []
-    left_html_lines.append(f"<b>To:</b> {client_name}")
-    if client_address:
-        left_html_lines.append(client_address)
-    if client_gstin:
-        left_html_lines.append(f"<b>GSTIN:</b> {client_gstin}")
-    left_box_html = "<br/>".join(left_html_lines)
-
+    # Right side: invoice top small rows (Invoice No, Date) then vendor details and bank
     inv_no = invoice_meta.get('invoice_no','')
     inv_date = invoice_meta.get('invoice_date','')
-    seller_lines_top = f"<b>Invoice No.:</b> {inv_no}<br/><b>Date:</b> {inv_date}"
-    seller_detail_lines = []
-    seller_detail_lines.append(f"<b>{COMPANY.get('name')}</b>")
-    seller_address = COMPANY.get('address','')
-    if seller_address:
-        seller_detail_lines.append(seller_address)
-    seller_detail_lines.append(f"<b>GSTIN:</b> {COMPANY.get('gstin','')}")
-    if COMPANY.get('pan'):
-        seller_detail_lines.append(f"<b>PAN:</b> {COMPANY.get('pan')}")
-    seller_detail_lines.append(f"Bank: {COMPANY.get('bank_name')} | A/C: {COMPANY.get('bank_account')}")
-    seller_details_html = "<br/>".join(seller_detail_lines)
-    right_box_content = f"{seller_lines_top}<br/><br/>{seller_details_html}"
+    right_top = f"<b>INVOICE NO. :</b> {inv_no} <br/><b>DATE :</b> {inv_date}"
+    vendor_lines = []
+    vendor_lines.append("<b>Vendor Electronic Remittance</b>")
+    vendor_lines.append(f"Bank Name : {COMPANY.get('bank_name')}")
+    vendor_lines.append(f"A/C No : {COMPANY.get('bank_account')}")
+    vendor_lines.append(f"IFS Code : {COMPANY.get('ifsc')}")
+    vendor_lines.append(f"Swift Code : {COMPANY.get('swift','-')}")
+    vendor_lines.append(f"MICR No : {COMPANY.get('micr','-')}")
+    vendor_lines.append(f"Branch : {COMPANY.get('branch')}")
+    vendor_html = "<br/>".join(vendor_lines)
+    right_html = right_top + "<br/><br/>" + vendor_html
 
-    boxes_table = Table([[Paragraph(left_box_html, wrap), Paragraph(right_box_content, wrap)]],
-                        colWidths=[page_width*0.5, page_width*0.5])
-    boxes_table.setStyle(TableStyle([
-        ('BOX', (0,0), (-1,-1), 0.5, colors.grey),
-        ('INNERGRID', (0,0), (-1,-1), 0.25, colors.grey),
+    boxes = Table([[Paragraph(left_html, wrap), Paragraph(right_html, wrap)]], colWidths=[page_width*0.55, page_width*0.45])
+    boxes.setStyle(TableStyle([
+        ('BOX',(0,0),(-1,-1),0.5,colors.grey),
+        ('INNERGRID',(0,0),(-1,-1),0.25,colors.grey),
         ('VALIGN',(0,0),(-1,-1),'TOP'),
-        ('LEFTPADDING', (0,0), (-1,-1), 6),
-        ('RIGHTPADDING', (0,0), (-1,-1), 6),
+        ('LEFTPADDING',(0,0),(-1,-1),6),
+        ('RIGHTPADDING',(0,0),(-1,-1),6),
     ]))
-    story.append(boxes_table)
-    story.append(Spacer(1, 8))
+    story.append(boxes)
+    story.append(Spacer(1,10))
 
-    # 5) Empty row (spacer)
-    story.append(Spacer(1, 6))
-
-    # 6) Items table
+    # Items table
     header = ["S.NO","PARTICULARS","DESCRIPTION of SAC CODE","SAC CODE","QTY","RATE","TAXABLE AMOUNT"]
-    table_data = [header]
-    for li in line_items:
-        qty = Decimal(str(li.get('qty',0) or 0))
-        rate = Decimal(str(li.get('rate',0) or 0))
-        taxable = (qty * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        table_data.append([
-            Paragraph(str(li.get('slno','')), wrap),
-            Paragraph(str(li.get('particulars','')), wrap),
-            Paragraph(str(li.get('description','')), wrap),
-            Paragraph(str(li.get('sac_code','')), wrap),
+    data = [header]
+    for r in line_items:
+        qty = Decimal(str(r.get('qty',0) or 0)); rate = Decimal(str(r.get('rate',0) or 0))
+        amt = (qty*rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        data.append([
+            Paragraph(str(r.get('slno','')), wrap),
+            Paragraph(r.get('particulars',''), wrap),
+            Paragraph(r.get('description',''), wrap),
+            Paragraph(r.get('sac_code',''), wrap),
             Paragraph(str(qty), wrap),
             Paragraph(f"Rs. {rate:,.2f}", wrap),
-            Paragraph(f"Rs. {taxable:,.2f}", wrap)
+            Paragraph(f"Rs. {amt:,.2f}", wrap)
         ])
-
-    col_widths = [14*mm, 48*mm, 70*mm, 22*mm, 14*mm, 22*mm, 30*mm]
-    items_tbl = Table(table_data, colWidths=col_widths, repeatRows=1, hAlign='LEFT')
+    col_w = [14*mm,48*mm,70*mm,22*mm,14*mm,22*mm,30*mm]
+    items_tbl = Table(data, colWidths=col_w, repeatRows=1)
     items_tbl.setStyle(TableStyle([
         ('GRID',(0,0),(-1,-1),0.25,colors.black),
         ('BACKGROUND',(0,0),(-1,0),colors.whitesmoke),
         ('VALIGN',(0,0),(-1,-1),'TOP'),
         ('ALIGN',(0,0),(0,-1),'CENTER'),
         ('ALIGN',(-3,1),(-1,-1),'RIGHT'),
-        ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
-        ('LEFTPADDING',(0,0),(-1,-1),3),
-        ('RIGHTPADDING',(0,0),(-1,-1),3),
     ]))
-    story.append(items_tbl)
-    story.append(Spacer(1, 8))
+    story.append(items_tbl); story.append(Spacer(1,8))
 
-    # 7) Totals + amount in words
-    subtotal = sum([Decimal(str(li.get('qty',0) or 0)) * Decimal(str(li.get('rate',0) or 0)) for li in line_items])
+    # Totals block (right aligned)
+    subtotal = sum([Decimal(str(r.get('qty',0) or 0)) * Decimal(str(r.get('rate',0) or 0)) for r in line_items])
     subtotal = subtotal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    advance = Decimal(str(invoice_meta.get('advance_received', 0) or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    adv = Decimal(str(invoice_meta.get('advance_received', 0) or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     comp_state = gst_state_code(COMPANY.get('gstin',''))
     cli_state = gst_state_code(client.get('gstin',''))
     use_igst = invoice_meta.get('use_igst', False)
     if comp_state and cli_state and comp_state != cli_state:
         use_igst = True
-
     if use_igst:
-        igst = (subtotal * Decimal('0.18')).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        sgst = cgst = Decimal('0.00')
+        igst = (subtotal * Decimal('0.18')).quantize(Decimal("0.01")); sgst = cgst = Decimal('0')
     else:
-        sgst = (subtotal * Decimal('0.09')).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        cgst = (subtotal * Decimal('0.09')).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        igst = Decimal('0.00')
+        sgst = (subtotal * Decimal('0.09')).quantize(Decimal("0.01")); cgst = (subtotal * Decimal('0.09')).quantize(Decimal("0.01")); igst = Decimal('0')
+    total = (subtotal + sgst + cgst + igst).quantize(Decimal("0.01"))
+    net = (total - adv).quantize(Decimal("0.01"))
 
-    total = (subtotal + sgst + cgst + igst).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    net_payable = (total - advance).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-
-    totals_data = [
-        ["Sub Total", Paragraph(f"Rs. {subtotal:,.2f}", wrap)]
+    totals = [
+        ["Sub Total", Paragraph(f"Rs. {subtotal:,.2f}", wrap)],
     ]
     if use_igst:
-        totals_data.append(["IGST (18%)", Paragraph(f"Rs. {igst:,.2f}", wrap)])
+        totals.append(["IGST (18%)", Paragraph(f"Rs. {igst:,.2f}", wrap)])
     else:
-        totals_data.append(["SGST (9%)", Paragraph(f"Rs. {sgst:,.2f}", wrap)])
-        totals_data.append(["CGST (9%)", Paragraph(f"Rs. {cgst:,.2f}", wrap)])
-    if advance > 0:
-        totals_data.append(["Less Advance Received", Paragraph(f"Rs. {advance:,.2f}", wrap)])
-    totals_data.append(["NET PAYABLE", Paragraph(f"Rs. {net_payable:,.2f}", wrap)])
+        totals.append(["SGST (9%)", Paragraph(f"Rs. {sgst:,.2f}", wrap)])
+        totals.append(["CGST (9%)", Paragraph(f"Rs. {cgst:,.2f}", wrap)])
+    if adv > 0:
+        totals.append(["Less Advance Received", Paragraph(f"Rs. {adv:,.2f}", wrap)])
+    totals.append(["TOTAL", Paragraph(f"Rs. {net:,.2f}", wrap)])
 
-    totals_tbl = Table(totals_data, colWidths=[page_width*0.65, page_width*0.35], hAlign='RIGHT')
-    totals_tbl.setStyle(TableStyle([
-        ('GRID',(0,0),(-1,-1),0.25,colors.grey),
-        ('ALIGN',(1,0),(1,-1),'RIGHT'),
-        ('BACKGROUND',(0,-1),(-1,-1),colors.whitesmoke),
-    ]))
-    story.append(totals_tbl)
-    story.append(Spacer(1,8))
+    tot_tbl = Table(totals, colWidths=[page_width*0.65, page_width*0.35], hAlign='RIGHT')
+    tot_tbl.setStyle(TableStyle([('GRID',(0,0),(-1,-1),0.25,colors.grey), ('ALIGN',(1,0),(1,-1),'RIGHT'), ('BACKGROUND',(0,-1),(-1,-1),colors.whitesmoke)]))
+    story.append(tot_tbl); story.append(Spacer(1,8))
 
-    story.append(Paragraph(f"In Words : ( {rupees_in_words(net_payable)} )", wrap))
+    # In words
+    story.append(Paragraph(f"In Words : ( {rupees_in_words(net)} )", wrap))
     story.append(Spacer(1,12))
 
-    # Signature area
-    try:
-        sigpath = COMPANY.get('signature','')
-        if sigpath and os.path.exists(sigpath):
-            sigimg = Image(sigpath, width=44.6*mm, height=31.3*mm)
-            sigimg.hAlign = 'LEFT'
-            story.append(KeepTogether([sigimg, Spacer(1,4), Paragraph("For Crux Management Services (P) Ltd<br/><br/>Authorised Signatory", styles['Normal'])]))
-        else:
-            story.append(Paragraph("For Crux Management Services (P) Ltd<br/><br/>Authorised Signatory", styles['Normal']))
-    except Exception:
+    # Signature + footer
+    if COMPANY.get('signature') and os.path.exists(COMPANY.get('signature')):
+        sig = Image(COMPANY['signature'], width=44.6*mm, height=31.3*mm); sig.hAlign='LEFT'
+        story.append(KeepTogether([sig, Spacer(1,4), Paragraph("For Crux Management Services (P) Ltd<br/><br/>Authorised Signatory", styles['Normal'])]))
+    else:
         story.append(Paragraph("For Crux Management Services (P) Ltd<br/><br/>Authorised Signatory", styles['Normal']))
 
-    story.append(Spacer(1,12))
+    story.append(Spacer(1,10))
     story.append(HR(page_width, thickness=0.5, color=colors.grey))
-    footer_text = COMPANY['address'] + " | Phone: " + COMPANY['phone'] + " | Email: " + COMPANY['email'] + " | " + APP_BUILT_BY
-    story.append(Paragraph(footer_text, styles['footer']))
-    story.append(Spacer(1,6))
+    footer = COMPANY['address'] + " | Phone: " + COMPANY['phone'] + " | Email: " + COMPANY['email'] + " | " + APP_BUILT_BY
+    story.append(Paragraph(footer, styles['footer']))
 
-    # Supporting data page
+    # Supporting docs page
     if supporting_df is not None and not supporting_df.empty:
-        try:
-            story.append(PageBreak())
-            story.append(Paragraph("Supporting Documents / Excel data", styles['Heading2']))
-            df = supporting_df.fillna("").astype(str)
-            data = [list(df.columns)]
-            for _, r in df.iterrows():
-                data.append(list(r.values))
-            sup_tbl = Table(data, repeatRows=1)
-            sup_tbl.setStyle(TableStyle([
-                ('GRID',(0,0),(-1,-1),0.25,colors.grey),
-                ('BACKGROUND',(0,0),(-1,0),colors.whitesmoke),
-                ('FONTSIZE',(0,0),(-1,-1),8)
-            ]))
-            story.append(sup_tbl)
-        except Exception:
-            story.append(Paragraph("Error adding supporting sheet", wrap))
+        story.append(PageBreak())
+        story.append(Paragraph("Supporting Documents / Excel data", styles['Heading2']))
+        df = supporting_df.fillna("").astype(str)
+        data = [list(df.columns)]
+        for _, r in df.iterrows():
+            data.append(list(r.values))
+        sup_tbl = Table(data, repeatRows=1)
+        sup_tbl.setStyle(TableStyle([('GRID',(0,0),(-1,-1),0.25,colors.grey), ('BACKGROUND',(0,0),(-1,0),colors.whitesmoke), ('FONTSIZE',(0,0),(-1,-1),8)]))
+        story.append(sup_tbl)
 
     doc.build(story)
     return path
 
-# ---------------- Streamlit UI ----------------
+# ---------------- Streamlit UI (same features) ----------------
 def main():
     st.set_page_config(page_title=APP_TITLE, layout="wide")
-    st.title(APP_TITLE)
-    st.caption(APP_BUILT_BY)
+    st.title(APP_TITLE); st.caption(APP_BUILT_BY)
     init_db()
 
     mode = st.sidebar.selectbox("Mode", ["Manage Clients", "Create Invoice", "History"])
 
-    # Manage Clients
     if mode == "Manage Clients":
         st.header("Manage Clients")
         clients = get_clients()
         if clients:
             dfc = pd.DataFrame(clients, columns=['id','name','gstin','address','email'])
             st.dataframe(dfc[['name','gstin','address']])
-
         with st.expander("Add New Client"):
             gstin_input = st.text_input("GSTIN (enter first to auto-fetch)", value="", max_chars=15)
-            c1, c2 = st.columns([1, 1])
+            c1, c2 = st.columns([1,1])
             with c1:
-                if st.button("Fetch details"):
+                if st.button("Fetch details from GST API"):
                     if not gstin_input.strip():
                         st.error("Please enter GSTIN first.")
                     else:
-                        with st.spinner("Fetching from GST API..."):
+                        with st.spinner("Fetching..."):
                             res = fetch_gst_from_appyflow(gstin_input)
                         if res.get("ok"):
-                            st.success("Details fetched. Verify & save.")
-                            name = st.text_input("Company Name", value=res.get("name", ""))
-                            address = st.text_area("Address", value=res.get("address", ""))
+                            st.success("Fetched. Verify & save.")
+                            name = st.text_input("Company Name", value=res.get("name",""))
+                            address = st.text_area("Address", value=res.get("address",""))
                             gstin = st.text_input("GSTIN", value=res.get("gstin", gstin_input))
-                            pan = st.text_input("PAN (auto)", value=res.get("pan", "") or "")
-                            # NOTE: We do NOT ask for client email per your request; DB column kept but left blank
+                            pan = st.text_input("PAN (auto)", value=res.get("pan","") or "")
                             if st.button("Save Client (Using fetched data)"):
                                 if not name:
                                     st.error("Name required")
                                 else:
-                                    add_client(name, gstin, pan, address, email="")
-                                    st.success("Client saved")
+                                    add_client(name,gstin,pan,address,email="")
+                                    st.success("Saved (no email).")
                         else:
-                            st.warning(f"API failed: {res.get('error')}. Fill manually below.")
+                            st.warning(f"Fetch failed: {res.get('error')}. Fill manually.")
                             name = st.text_input("Company Name")
                             address = st.text_area("Address")
                             gstin = st.text_input("GSTIN", value=gstin_input)
                             pan = st.text_input("PAN (if any)")
                             if st.button("Save Client (Manual)"):
-                                if not name:
-                                    st.error("Name required")
+                                if not name: st.error("Name required")
                                 else:
-                                    add_client(name, gstin, pan, address, email="")
-                                    st.success("Client saved (manual, no email).")
+                                    add_client(name,gstin,pan,address,email=""); st.success("Saved manual.")
+            with c2:
+                st.info("Put Appyflow key in Streamlit secrets: [appyflow] key_secret = \"YOUR_KEY\"")
+
         with st.expander("Edit / Delete Client"):
             clients_list = get_clients()
             clients_map = {f"{c[1]} ({c[2]})": c[0] for c in clients_list}
@@ -507,17 +405,14 @@ def main():
                     gstin2 = st.text_input("GSTIN", value=gstin)
                     pan2 = st.text_input("PAN", value=pan or "")
                     address2 = st.text_area("Address", value=address)
-                    col1, col2 = st.columns(2)
+                    col1,col2 = st.columns(2)
                     with col1:
                         if st.button("Update Client"):
-                            update_client(cid, name2, gstin2, pan2, address2, email or "")
-                            st.success("Updated")
+                            update_client(cid,name2,gstin2,pan2,address2,email or ""); st.success("Updated")
                     with col2:
                         if st.button("Delete Client"):
-                            delete_client(cid)
-                            st.success("Deleted")
+                            delete_client(cid); st.success("Deleted")
 
-    # Create Invoice
     elif mode == "Create Invoice":
         st.header("Create Invoice")
         clients = get_clients()
@@ -530,28 +425,24 @@ def main():
             if rec:
                 client_info = {"id": rec[0], "name": rec[1], "gstin": rec[2], "pan": rec[3], "address": rec[4]}
 
-        col1, col2 = st.columns(2)
+        col1,col2 = st.columns(2)
         with col1:
             invoice_no = st.text_input("Invoice No", value=f"INV{int(datetime.now().timestamp())}")
             invoice_date = st.date_input("Invoice Date", value=date.today())
         with col2:
-            payment_mode = st.selectbox("Payment Mode", ["Bank", "UPI", "Cash"])
+            payment_mode = st.selectbox("Payment Mode", ["Bank","UPI","Cash"])
             training_dates = st.text_input("Training/Exam Dates (optional)")
 
         st.subheader("Line Items")
         if "rows" not in st.session_state:
-            st.session_state.rows = [
-                {"slno":1,"particulars":"DEGREE","description":"Commercial Training And Coaching Services","sac_code":"999293","qty":1,"rate":100,"taxable_amount":100}
-            ]
-
+            st.session_state.rows = [{"slno":1,"particulars":"DEGREE","description":"Commercial Training And Coaching Services","sac_code":"999293","qty":1,"rate":100,"taxable_amount":100}]
         if st.button("Add New Row"):
-            st.session_state.rows.append({"slno": len(st.session_state.rows)+1, "particulars":"", "description":"", "sac_code":"", "qty":0, "rate":0, "taxable_amount":0})
-            st.rerun()
+            st.session_state.rows.append({"slno":len(st.session_state.rows)+1,"particulars":"","description":"","sac_code":"","qty":0,"rate":0,"taxable_amount":0}); st.rerun()
 
         for idx in range(len(st.session_state.rows)):
             r = st.session_state.rows[idx]
-            with st.expander(f"Row {r.get('slno', idx+1)} — {r.get('particulars','') or 'New Item'}", expanded=False):
-                c1, c2, c3, c4, c5, c6, c7 = st.columns([1.0, 3.0, 4.0, 1.2, 1.0, 1.0, 1.0])
+            with st.expander(f"Row {r.get('slno', idx+1)}", expanded=False):
+                c1,c2,c3,c4,c5,c6,c7 = st.columns([1,3,4,1.2,1,1,1])
                 new_sl = c1.number_input("S.No", value=int(r.get('slno', idx+1)), min_value=1, step=1, key=f"sl_{idx}")
                 new_part = c2.text_input("Particulars", value=r.get('particulars',''), key=f"part_{idx}")
                 new_desc = c3.text_input("Description", value=r.get('description',''), key=f"desc_{idx}")
@@ -560,43 +451,28 @@ def main():
                 new_rate = c6.number_input("Rate", value=float(r.get('rate',0.0)), min_value=0.0, key=f"rate_{idx}")
                 new_taxable = round(new_qty * new_rate, 2)
                 c7.write(f"Taxable: Rs. {new_taxable:,.2f}")
-                st.session_state.rows[idx].update({
-                    "slno": new_sl,
-                    "particulars": new_part,
-                    "description": new_desc,
-                    "sac_code": new_sac,
-                    "qty": new_qty,
-                    "rate": new_rate,
-                    "taxable_amount": new_taxable
-                })
-                bcol1, bcol2, bcol3, bcol4 = st.columns([1,1,1,1])
-                with bcol1:
-                    if st.button("Remove", key=f"remove_{idx}"):
-                        st.session_state.rows.pop(idx)
-                        st.rerun()
-                with bcol2:
+                st.session_state.rows[idx].update({"slno":new_sl,"particulars":new_part,"description":new_desc,"sac_code":new_sac,"qty":new_qty,"rate":new_rate,"taxable_amount":new_taxable})
+                b1,b2,b3,b4 = st.columns([1,1,1,1])
+                with b1:
+                    if st.button("Remove", key=f"rm_{idx}"): st.session_state.rows.pop(idx); st.rerun()
+                with b2:
                     if st.button("Duplicate", key=f"dup_{idx}"):
-                        dup = st.session_state.rows[idx].copy()
-                        st.session_state.rows.insert(idx+1, dup)
-                        for i, rr in enumerate(st.session_state.rows, start=1):
-                            rr['slno'] = i
+                        dup = st.session_state.rows[idx].copy(); st.session_state.rows.insert(idx+1, dup)
+                        for i, rr in enumerate(st.session_state.rows, start=1): rr['slno'] = i
                         st.rerun()
-                with bcol3:
-                    if st.button("Move Up", key=f"up_{idx}") and idx > 0:
+                with b3:
+                    if st.button("Move Up", key=f"up_{idx}") and idx>0:
                         st.session_state.rows[idx-1], st.session_state.rows[idx] = st.session_state.rows[idx], st.session_state.rows[idx-1]
-                        for i, rr in enumerate(st.session_state.rows, start=1):
-                            rr['slno'] = i
+                        for i, rr in enumerate(st.session_state.rows, start=1): rr['slno'] = i
                         st.rerun()
-                with bcol4:
+                with b4:
                     if st.button("Move Down", key=f"down_{idx}") and idx < len(st.session_state.rows)-1:
                         st.session_state.rows[idx+1], st.session_state.rows[idx] = st.session_state.rows[idx], st.session_state.rows[idx+1]
-                        for i, rr in enumerate(st.session_state.rows, start=1):
-                            rr['slno'] = i
+                        for i, rr in enumerate(st.session_state.rows, start=1): rr['slno'] = i
                         st.rerun()
 
         if st.button("Add New Row (Bottom)"):
-            st.session_state.rows.append({"slno": len(st.session_state.rows)+1, "particulars":"", "description":"", "sac_code":"", "qty":0, "rate":0, "taxable_amount":0})
-            st.rerun()
+            st.session_state.rows.append({"slno":len(st.session_state.rows)+1,"particulars":"","description":"","sac_code":"","qty":0,"rate":0,"taxable_amount":0}); st.rerun()
 
         force_igst = st.checkbox("Force IGST (18%) manually", value=False)
         advance_received = st.number_input("Advance Received (if any)", min_value=0.0, value=0.0)
@@ -620,33 +496,21 @@ def main():
             if not client_info:
                 st.error("Select a client first.")
             else:
-                meta = {
-                    "invoice_no": invoice_no,
-                    "invoice_date": invoice_date.strftime("%d-%m-%Y"),
-                    "client": client_info,
-                    "use_igst": force_igst,
-                    "advance_received": float(advance_received)
-                }
+                meta = {"invoice_no": invoice_no, "invoice_date": invoice_date.strftime("%d-%m-%Y"), "client": client_info, "use_igst": force_igst, "advance_received": float(advance_received)}
                 try:
                     pdf_path = generate_invoice_pdf(meta, st.session_state.rows, supporting_df)
-                    # Save invoice summary to DB
+                    # Save invoice summary
                     subtotal_dec = float(sum([r['taxable_amount'] for r in st.session_state.rows]))
-                    comp_state = gst_state_code(COMPANY.get('gstin',''))
-                    cli_state = gst_state_code(client_info.get('gstin',''))
+                    comp_state = gst_state_code(COMPANY.get('gstin','')); cli_state = gst_state_code(client_info.get('gstin',''))
                     auto_igst = False
-                    if comp_state and cli_state and comp_state != cli_state:
-                        auto_igst = True
+                    if comp_state and cli_state and comp_state != cli_state: auto_igst = True
                     use_igst_final = force_igst or auto_igst
                     if use_igst_final:
-                        igst_val = subtotal_dec * 0.18
-                        sgst_val = cgst_val = 0.0
+                        igst_val = subtotal_dec * 0.18; sgst_val = cgst_val = 0.0
                     else:
-                        sgst_val = subtotal_dec * 0.09
-                        cgst_val = subtotal_dec * 0.09
-                        igst_val = 0.0
+                        sgst_val = subtotal_dec * 0.09; cgst_val = subtotal_dec * 0.09; igst_val = 0.0
                     total_val = subtotal_dec + sgst_val + cgst_val + igst_val - float(advance_received)
-                    conn = sqlite3.connect(DB_PATH)
-                    cur = conn.cursor()
+                    conn = sqlite3.connect(DB_PATH); cur = conn.cursor()
                     cur.execute("INSERT INTO invoices (invoice_no, invoice_date, client_id, subtotal, sgst, cgst, igst, total, pdf_path) VALUES (?,?,?,?,?,?,?,?,?)",
                                 (meta['invoice_no'], invoice_date.strftime("%Y-%m-%d"), client_info['id'], subtotal_dec, sgst_val, cgst_val, igst_val, total_val, pdf_path))
                     conn.commit(); conn.close()
@@ -657,7 +521,6 @@ def main():
                     st.error("Error generating PDF. See traceback below.")
                     st.text(traceback.format_exc())
 
-    # History
     else:
         st.header("Invoice History")
         conn = sqlite3.connect(DB_PATH)

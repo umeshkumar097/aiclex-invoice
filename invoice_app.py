@@ -22,7 +22,7 @@ from reportlab.lib import colors
 from reportlab.lib.units import mm
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-    Image, PageBreak, Flowable, KeepTogether
+    Image, PageBreak, Flowable
 )
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
@@ -54,11 +54,19 @@ COMPANY = {
 }
 
 # ---------------- Styles ----------------
-styles = getSampleStyleSheet()
-styles.add(ParagraphStyle(name='wrap', fontSize=9, leading=11))
-styles.add(ParagraphStyle(name='title_center', fontSize=18, leading=20, alignment=1))
-styles.add(ParagraphStyle(name='small_right', fontSize=9, alignment=2))
-styles.add(ParagraphStyle(name='footer', fontSize=7, alignment=1, leading=9))
+base_styles = getSampleStyleSheet()
+# Body (table cells) font size 9
+BODY_STYLE = ParagraphStyle("body", parent=base_styles["Normal"], fontSize=9, leading=11)
+# Header (table header) font size 11
+HEADER_STYLE = ParagraphStyle("header", parent=base_styles["Normal"], fontSize=11, leading=12, alignment=1)
+# Title
+TITLE_STYLE = ParagraphStyle("title", parent=base_styles["Heading1"], fontSize=16, leading=18, alignment=1)
+# Right aligned small
+RIGHT_STYLE = ParagraphStyle("right", parent=base_styles["Normal"], fontSize=9, leading=11, alignment=2)
+# Description (wrap)
+DESC_STYLE = ParagraphStyle("desc", parent=base_styles["Normal"], fontSize=9, leading=11)
+# Footer
+FOOTER_STYLE = ParagraphStyle("footer", parent=base_styles["Normal"], fontSize=7, leading=8, alignment=1)
 
 # ---------------- Helpers ----------------
 def money(v):
@@ -87,6 +95,7 @@ def gst_state_code(gstin):
         return None
 
 def safe_rerun():
+    # Streamlit API changed in versions; use attribute check
     if hasattr(st, "experimental_rerun"):
         try:
             st.experimental_rerun()
@@ -211,12 +220,15 @@ class HR(Flowable):
         self.canv.setStrokeColor(self.color)
         self.canv.line(0,0,self.width,0)
 
-# ---------------- PDF generation (final improved) ----------------
+# ---------------- PDF generation (with header fonts 11 / body fonts 9) ----------------
 def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     """
-    PDF generator: header = logo_top + tagline only.
-    Footer = company_text image (if present) + signature + "For CRUX..." text.
-    Removes earlier footer text. Keeps other functionality intact.
+    PDF generator:
+    - Table header font size = 11
+    - Table body font size = 9
+    - Header: logo_top + tagline only
+    - Footer: company_text image (if available) instead of plain text
+    - Filters empty rows
     """
     from decimal import Decimal, ROUND_HALF_UP
     from reportlab.lib.styles import ParagraphStyle
@@ -254,13 +266,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     story = []
     page_width = A4[0] - (12*mm + 12*mm)
 
-    # styles
-    body_style = ParagraphStyle("body", fontSize=9, leading=11)
-    title_style = ParagraphStyle("title", fontSize=16, leading=18, alignment=1)
-    right_style = ParagraphStyle("right", fontSize=9, leading=11, alignment=2)
-    desc_style = ParagraphStyle("desc", fontSize=9, leading=11)
-
-    # helper to add image if exists
+    # small helper to add image safely
     def add_image_if(path, w_mm=None, h_mm=None, align='CENTER', spacer_after=4):
         if path and os.path.exists(path):
             try:
@@ -274,23 +280,23 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
             except Exception:
                 pass
 
-    # HEADER: only logo_top and tagline (company_text removed from header)
+    # HEADER: only logo_top and tagline
     add_image_if(COMPANY.get('logo_top'), w_mm=87, h_mm=25.2, align='CENTER', spacer_after=2)
     add_image_if(COMPANY.get('tagline'), w_mm=164.8, h_mm=5.4, align='CENTER', spacer_after=6)
 
-    # Title row
-    story.append(Paragraph("INVOICE", title_style))
+    # Title
+    story.append(Paragraph("INVOICE", TITLE_STYLE))
     story.append(Spacer(1,6))
 
     # GST / PAN row
     gst_html = f"<b>GST IN :</b> {COMPANY.get('gstin','')}"
     pan_html = f"<b>PAN NO :</b> {COMPANY.get('pan','')}"
-    gst_pan_tbl = Table([[Paragraph(gst_html, body_style), Paragraph(pan_html, right_style)]], colWidths=[page_width*0.6, page_width*0.4])
+    gst_pan_tbl = Table([[Paragraph(gst_html, BODY_STYLE), Paragraph(pan_html, RIGHT_STYLE)]], colWidths=[page_width*0.6, page_width*0.4])
     gst_pan_tbl.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'), ('BOTTOMPADDING',(0,0),(-1,-1),6)]))
     story.append(gst_pan_tbl)
     story.append(Spacer(1,6))
 
-    # Service Location and Invoice details box (same as before)
+    # Service Location (left) and Invoice details (right)
     client = invoice_meta.get('client', {}) or {}
     left_lines = ["<b>Service Location</b>"]
     if client.get('name'):
@@ -318,7 +324,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     ]
     right_html = "<br/>".join(right_lines)
 
-    big_box = Table([[Paragraph(left_html, body_style), Paragraph(right_html, body_style)]], colWidths=[page_width*0.55, page_width*0.45])
+    big_box = Table([[Paragraph(left_html, BODY_STYLE), Paragraph(right_html, BODY_STYLE)]], colWidths=[page_width*0.55, page_width*0.45])
     big_box.setStyle(TableStyle([
         ('BOX',(0,0),(-1,-1),0.6,colors.black),
         ('INNERGRID',(0,0),(-1,-1),0.25,colors.grey),
@@ -333,7 +339,9 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
 
     # Items table
     headers = ["SL.NO","PARTICULARS","DESCRIPTION of SAC CODE","SAC CODE","QTY","RATE","TAXABLE AMOUNT"]
-    col_w = [12*mm, 38*mm, (page_width - (12*mm + 38*mm + 22*mm + 14*mm + 22*mm + 26*mm)), 22*mm, 14*mm, 22*mm, 26*mm]
+    # column widths tuned to fit
+    col_w = [12*mm, 45*mm, (page_width - (12*mm + 45*mm + 22*mm + 14*mm + 22*mm + 26*mm)), 22*mm, 14*mm, 22*mm, 26*mm]
+    # ensure minimums
     for i in range(len(col_w)):
         if col_w[i] < 10*mm:
             col_w[i] = 10*mm
@@ -342,37 +350,41 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
         scale = page_width / total_w
         col_w = [w*scale for w in col_w]
 
-    table_data = [[Paragraph(h, ParagraphStyle('h', fontSize=9, alignment=1, leading=10)) for h in headers]]
+    # header row with size 11
+    table_data = [[Paragraph(h, HEADER_STYLE) for h in headers]]
+
+    # rows
     for r in filtered_items:
         row = [
-            Paragraph(str(r.get('slno','')), body_style),
-            Paragraph(r.get('particulars',''), body_style),
-            Paragraph(r.get('description',''), desc_style),
-            Paragraph(r.get('sac_code',''), body_style),
-            Paragraph(str(r.get('qty','')), right_style),
-            Paragraph(f"{r.get('rate'):,}", right_style),
-            Paragraph(f"{r.get('taxable_amount'):,}", right_style)
+            Paragraph(str(r.get('slno','')), BODY_STYLE),
+            Paragraph(r.get('particulars',''), BODY_STYLE),
+            Paragraph(r.get('description',''), DESC_STYLE),
+            Paragraph(r.get('sac_code',''), BODY_STYLE),
+            Paragraph(str(r.get('qty','')), RIGHT_STYLE),
+            Paragraph(f"{r.get('rate'):,}", RIGHT_STYLE),
+            Paragraph(f"{r.get('taxable_amount'):,}", RIGHT_STYLE)
         ]
         table_data.append(row)
+
     if len(table_data) == 1:
-        table_data.append([Paragraph("-", body_style)] + [Paragraph("-", body_style)]*(len(headers)-1))
+        table_data.append([Paragraph("-", BODY_STYLE)] + [Paragraph("-", BODY_STYLE)]*(len(headers)-1))
 
     items_tbl = Table(table_data, colWidths=col_w, repeatRows=1)
     items_tbl.setStyle(TableStyle([
-        ('GRID',(0,0),(-1,-1),0.25,colors.black),
+        ('GRID',(0,0),(-1,-1),0.35,colors.black),
         ('BACKGROUND',(0,0),(-1,0),colors.whitesmoke),
         ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
         ('ALIGN',(0,0),(0,-1),'CENTER'),
         ('ALIGN',(-3,1),(-1,-1),'RIGHT'),
-        ('LEFTPADDING',(0,0),(-1,-1),4),
-        ('RIGHTPADDING',(0,0),(-1,-1),4),
-        ('TOPPADDING',(0,0),(-1,-1),4),
-        ('BOTTOMPADDING',(0,0),(-1,-1),4),
+        ('LEFTPADDING',(0,0),(-1,-1),6),
+        ('RIGHTPADDING',(0,0),(-1,-1),6),
+        ('TOPPADDING',(0,0),(-1,-1),6),
+        ('BOTTOMPADDING',(0,0),(-1,-1),6),
     ]))
     story.append(items_tbl)
     story.append(Spacer(1,8))
 
-    # Totals
+    # Totals calculation
     subtotal = q(sum([r['taxable_amount'] for r in filtered_items])) if filtered_items else q(0)
     adv = q(invoice_meta.get('advance_received', 0) or 0)
 
@@ -393,31 +405,34 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     total = subtotal + sgst + cgst + igst
     net = (total - adv).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
+    # totals table - right aligned
     totals = []
-    totals.append([Paragraph("Sub Total", body_style), Paragraph(f"Rs. {subtotal:,.2f}", right_style)])
+    totals.append([Paragraph("Sub Total", BODY_STYLE), Paragraph(f"Rs. {subtotal:,.2f}", RIGHT_STYLE)])
     if use_igst:
-        totals.append([Paragraph("IGST (18%)", body_style), Paragraph(f"Rs. {igst:,.2f}", right_style)])
+        totals.append([Paragraph("IGST (18%)", BODY_STYLE), Paragraph(f"Rs. {igst:,.2f}", RIGHT_STYLE)])
     else:
-        totals.append([Paragraph("SGST (9%)", body_style), Paragraph(f"Rs. {sgst:,.2f}", right_style)])
-        totals.append([Paragraph("CGST (9%)", body_style), Paragraph(f"Rs. {cgst:,.2f}", right_style)])
+        totals.append([Paragraph("SGST (9%)", BODY_STYLE), Paragraph(f"Rs. {sgst:,.2f}", RIGHT_STYLE)])
+        totals.append([Paragraph("CGST (9%)", BODY_STYLE), Paragraph(f"Rs. {cgst:,.2f}", RIGHT_STYLE)])
     if adv > 0:
-        totals.append([Paragraph("Less Advance Received", body_style), Paragraph(f"Rs. {adv:,.2f}", right_style)])
-    totals.append([Paragraph("<b>TOTAL</b>", body_style), Paragraph(f"<b>Rs. {net:,.2f}</b>", right_style)])
+        totals.append([Paragraph("Less Advance Received", BODY_STYLE), Paragraph(f"Rs. {adv:,.2f}", RIGHT_STYLE)])
+    totals.append([Paragraph("<b>TOTAL</b>", BODY_STYLE), Paragraph(f"<b>Rs. {net:,.2f}</b>", RIGHT_STYLE)])
 
     tot_tbl = Table(totals, colWidths=[page_width*0.65, page_width*0.35], hAlign='RIGHT')
     tot_tbl.setStyle(TableStyle([
-        ('GRID',(0,0),(-1,-1),0.25,colors.grey),
+        ('LINEBEFORE',(0,0),(0,-1),0.25,colors.white),
+        ('LINEABOVE',(0,-1),(-1,-1),0.75,colors.black),
         ('ALIGN',(1,0),(1,-1),'RIGHT'),
-        ('BACKGROUND',(0,-1),(-1,-1),colors.whitesmoke)
+        ('LEFTPADDING',(0,0),(-1,-1),6),
+        ('RIGHTPADDING',(0,0),(-1,-1),6),
     ]))
     story.append(tot_tbl)
     story.append(Spacer(1,8))
 
     # In words
-    story.append(Paragraph(f"In Words : ( {rupees_in_words(net)} )", body_style))
+    story.append(Paragraph(f"In Words : ( {rupees_in_words(net)} )", BODY_STYLE))
     story.append(Spacer(1,10))
 
-    # Signature image + text
+    # Signature
     if COMPANY.get('signature') and os.path.exists(COMPANY.get('signature')):
         try:
             sig = Image(COMPANY['signature'], width=44.6*mm, height=31.3*mm)
@@ -426,19 +441,21 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
             story.append(Spacer(1,4))
         except Exception:
             pass
+    story.append(Paragraph("For " + COMPANY.get('name', ''), BODY_STYLE))
+    story.append(Paragraph("Authorised Signatory", BODY_STYLE))
+    story.append(Spacer(1,10))
 
-    # FOOTER: add company_text image at footer (instead of footer text). If not present, footer will be minimal.
-    # place company_text image centered near bottom
+    # FOOTER: company_text image centered (instead of plain footer text)
     if COMPANY.get('company_text') and os.path.exists(COMPANY.get('company_text')):
         add_image_if(COMPANY.get('company_text'), w_mm=177, h_mm=27.2, align='CENTER', spacer_after=4)
-    # (no plain footer text with "Built by Aiclex" or contact)
+    # (no "Built by Aiclex" in PDF)
 
-    # Supporting dataframe - add on new page(s) if provided
+    # Supporting dataframe page(s)
     if supporting_df is not None and not supporting_df.empty:
         try:
             df = supporting_df.fillna("").astype(str)
             story.append(PageBreak())
-            story.append(Paragraph("Supporting Document", title_style))
+            story.append(Paragraph("Supporting Documents / Excel data", TITLE_STYLE))
             story.append(Spacer(1,6))
 
             cols = list(df.columns)
@@ -446,7 +463,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
             for start in range(0, len(cols), max_cols):
                 subset_cols = cols[start:start+max_cols]
                 sub_df = df[subset_cols]
-                header_row = [Paragraph(str(c), ParagraphStyle('h', fontSize=8, alignment=1)) for c in sub_df.columns]
+                header_row = [Paragraph(str(c), ParagraphStyle('sh', fontSize=9, leading=10, alignment=1)) for c in sub_df.columns]
                 table_rows = [header_row]
                 for _, row in sub_df.iterrows():
                     row_cells = []
@@ -466,7 +483,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
                 story.append(sup_tbl)
                 story.append(Spacer(1,8))
         except Exception as e:
-            story.append(Paragraph("Error rendering supporting sheet: " + str(e), body_style))
+            story.append(Paragraph("Error rendering supporting sheet: " + str(e), BODY_STYLE))
 
     doc.build(story)
     return path

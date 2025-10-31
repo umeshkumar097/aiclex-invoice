@@ -1,6 +1,14 @@
 # invoice_app.py
 # Crux Invoice Management System
 # Built by Aiclex Technologies
+#
+# Notes:
+# - Images expected in assets/ as .jpg (not .jpeg)
+#   logo_top.jpg, company_text.jpg, tagline.jpg, signature_stamp.jpg
+# - Appyflow GST API key should be stored in .streamlit/secrets.toml:
+#     [appyflow]
+#     key_secret = "YOUR_APPYFLOW_KEY_SECRET"
+# - This version DOES NOT ask for client email when adding a client (per request).
 
 import streamlit as st
 import sqlite3
@@ -29,7 +37,7 @@ DB_PATH = "invoices.db"
 PDF_DIR = "generated_pdfs"
 os.makedirs(PDF_DIR, exist_ok=True)
 
-# Company info + assets (ensure assets exist)
+# ---------------- Company & asset paths (use .jpg) ----------------
 COMPANY = {
     "name": "CRUX MANAGEMENT SERVICES (P) LTD",
     "gstin": "36AABCC4754D1ZX",
@@ -82,6 +90,7 @@ def gst_state_code(gstin):
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
+    # Keep email column in DB for backward compatibility but we will not ask on add
     cur.execute("""
         CREATE TABLE IF NOT EXISTS clients (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -110,20 +119,23 @@ def get_client_by_id(cid):
     conn.close()
     return row
 
-def add_client(name,gstin,pan,address,email):
+def add_client(name, gstin, pan, address, email=""):
     conn = sqlite3.connect(DB_PATH)
     conn.execute("INSERT INTO clients (name,gstin,pan,address,email) VALUES (?,?,?,?,?)", (name,gstin,pan,address,email))
-    conn.commit(); conn.close()
+    conn.commit()
+    conn.close()
 
-def update_client(cid,name,gstin,pan,address,email):
+def update_client(cid, name, gstin, pan, address, email=""):
     conn = sqlite3.connect(DB_PATH)
     conn.execute("UPDATE clients SET name=?,gstin=?,pan=?,address=?,email=? WHERE id=?", (name,gstin,pan,address,email,cid))
-    conn.commit(); conn.close()
+    conn.commit()
+    conn.close()
 
 def delete_client(cid):
     conn = sqlite3.connect(DB_PATH)
     conn.execute("DELETE FROM clients WHERE id=?", (cid,))
-    conn.commit(); conn.close()
+    conn.commit()
+    conn.close()
 
 # ---------------- GST API (Appyflow) ----------------
 def fetch_gst_from_appyflow(gstin, timeout=8):
@@ -138,7 +150,7 @@ def fetch_gst_from_appyflow(gstin, timeout=8):
         key_secret = os.getenv("APPYFLOW_KEY_SECRET")
 
     if not key_secret:
-        return {"ok": False, "error": "API key not configured (add to Streamlit secrets)"}
+        return {"ok": False, "error": "API key missing in secrets."}
 
     url = "https://appyflow.in/api/verifyGST"
     params = {"key_secret": key_secret, "gstNo": gstin}
@@ -147,32 +159,45 @@ def fetch_gst_from_appyflow(gstin, timeout=8):
         r.raise_for_status()
         j = r.json()
     except Exception as e:
-        return {"ok": False, "error": f"API request failed: {e}"}
+        return {"ok": False, "error": f"Request failed: {e}"}
 
-    # Best-effort parse based on doc
+    # Parse API response (best-effort)
     if isinstance(j, dict) and ("taxpayerInfo" in j or j.get("error") is False):
         info = j.get("taxpayerInfo") or j.get("taxpayerinfo") or j.get("taxpayer") or j
-        name = info.get("tradeNam") or info.get("lgnm") or info.get("tradeName") or ""
+
+        # Name detection
+        name = info.get("tradeNam") or info.get("lgnm") or info.get("tradeName") or info.get("name") or ""
+
+        # Address build (best-effort)
         addr = ""
         try:
             pradr = info.get("pradr", {}) or {}
             a = pradr.get("addr", {}) or {}
             parts = []
-            # common keys mapping
-            for k in ("bno","st","loc","city","dst","pncd","stcd","bn"):
+            for k in ("bno","st","loc","city","dst","pncd","stcd","bn","addr1","addr2"):
                 v = a.get(k) or a.get(k.upper()) or a.get(k.lower())
                 if v:
                     parts.append(str(v))
             addr = ", ".join(parts)
         except:
             addr = ""
+
+        # PAN: try API fields then extract from GSTIN fallback
+        pan = None
+        for pk in ("pan", "panno", "panNo", "PAN"):
+            if info.get(pk):
+                pan = str(info.get(pk)).strip()
+                break
+        if not pan and len(gstin) >= 12:
+            pan = gstin[2:12].upper()
+
         gstout = info.get("gstin") or gstin
-        return {"ok": True, "name": name, "address": addr, "gstin": gstout, "raw": j}
+        return {"ok": True, "name": name, "address": addr, "gstin": gstout, "pan": pan, "raw": j}
     else:
         msg = j.get("message") if isinstance(j, dict) else str(j)
         return {"ok": False, "error": msg or "API returned error"}
 
-# ---------------- Small HR flowable ----------------
+# ---------------- HR flowable ----------------
 class HR(Flowable):
     def __init__(self, width, thickness=1, color=colors.black):
         Flowable.__init__(self)
@@ -184,7 +209,6 @@ class HR(Flowable):
 
 # ---------------- PDF generation ----------------
 def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
-    # filename
     filename = f"Invoice_{invoice_meta.get('invoice_no','NA')}_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
     path = os.path.join(PDF_DIR, filename)
 
@@ -194,22 +218,22 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     footer = styles['footer']
     page_width = A4[0] - (15*mm + 15*mm)
 
-    # helper to add image safely
     def safe_img(path, w, h, align='CENTER'):
         if path and os.path.exists(path):
             img = Image(path, width=w, height=h); img.hAlign = align; story.append(img)
 
-    # Logo: H 25.2mm x W 87mm
+    # logo top (87mm x 25.2mm)
     safe_img(COMPANY.get('logo_top'), 87*mm, 25.2*mm, align='CENTER')
     story.append(Spacer(1,4))
-    # Company text: H 27.2mm x W 177mm
+
+    # company text (177mm x 27.2mm)
     safe_img(COMPANY.get('company_text'), 177*mm, 27.2*mm, align='CENTER')
     story.append(Spacer(1,4))
-    # Tagline: H 5.4mm x W 164.8mm
+
+    # tagline (164.8mm x 5.4mm)
     safe_img(COMPANY.get('tagline'), 164.8*mm, 5.4*mm, align='CENTER')
     story.append(Spacer(1,8))
 
-    # Address block at right
     address_block = COMPANY['address'] + "<br/>Phone: " + COMPANY['phone'] + "<br/>Email: " + COMPANY['email']
     top_tbl = Table([[Paragraph("", wrap), Paragraph(address_block, wrap)]], colWidths=[page_width*0.55, page_width*0.45])
     top_tbl.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'), ('ALIGN',(1,0),(1,0),'RIGHT')]))
@@ -218,7 +242,6 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     story.append(HR(page_width, thickness=1, color=colors.black))
     story.append(Spacer(1,8))
 
-    # Invoice header: left client, right invoice & bank
     client = invoice_meta.get('client', {}) or {}
     client_name = client.get('name','')
     client_addr = client.get('address','')
@@ -240,7 +263,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     story.append(inv_tbl)
     story.append(Spacer(1,10))
 
-    # Line items table
+    # items
     header = ["S.NO","PARTICULARS","DESCRIPTION of SAC CODE","SAC CODE","QTY","RATE","TAXABLE AMOUNT"]
     table_data = [header]
     for li in line_items:
@@ -272,7 +295,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     story.append(items_table)
     story.append(Spacer(1,8))
 
-    # Totals and taxes
+    # totals
     subtotal = sum([Decimal(str(li.get('qty',0) or 0)) * Decimal(str(li.get('rate',0) or 0)) for li in line_items])
     subtotal = subtotal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
     advance = Decimal(str(invoice_meta.get('advance_received', 0) or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
@@ -318,7 +341,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     story.append(Paragraph(f"In Words : ( {rupees_in_words(net_payable)} )", wrap))
     story.append(Spacer(1,12))
 
-    # Signature stamp (H 31.3mm x W 44.6mm) left
+    # signature
     if COMPANY.get('signature') and os.path.exists(COMPANY.get('signature')):
         sig_img = Image(COMPANY['signature'], width=44.6*mm, height=31.3*mm)
         sig_img.hAlign = 'LEFT'
@@ -331,7 +354,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     footer_text = COMPANY['address'] + " | Phone: " + COMPANY['phone'] + " | Email: " + COMPANY['email'] + " | " + APP_BUILT_BY
     story.append(Paragraph(footer_text, footer))
 
-    # Supporting data page
+    # supporting df
     if supporting_df is not None and not supporting_df.empty:
         try:
             story.append(PageBreak())
@@ -358,50 +381,52 @@ def main():
 
     mode = st.sidebar.selectbox("Mode", ["Manage Clients", "Create Invoice", "History"])
 
-    # -------- Manage Clients --------
+    # Manage Clients
     if mode == "Manage Clients":
         st.header("Manage Clients")
         clients = get_clients()
         if clients:
             dfc = pd.DataFrame(clients, columns=['id','name','gstin','address','email'])
-            st.dataframe(dfc[['name','gstin','address','email']])
+            st.dataframe(dfc[['name','gstin','address']])
 
         with st.expander("Add New Client"):
             gstin_input = st.text_input("GSTIN (enter first to auto-fetch)", value="", max_chars=15)
             c1, c2 = st.columns([1, 1])
             with c1:
-                if st.button("Fetch details"):
+                if st.button("Fetch details from GST API"):
                     if not gstin_input.strip():
                         st.error("Please enter GSTIN first.")
                     else:
                         with st.spinner("Fetching from GST API..."):
                             res = fetch_gst_from_appyflow(gstin_input)
                         if res.get("ok"):
-                            st.success("Details fetched. Verify and save.")
+                            st.success("Details fetched. Verify & save.")
                             name = st.text_input("Company Name", value=res.get("name", ""))
                             address = st.text_area("Address", value=res.get("address", ""))
                             gstin = st.text_input("GSTIN", value=res.get("gstin", gstin_input))
-                            pan = st.text_input("PAN (if available)", value="")
-                            email = st.text_input("Default Email", value="")
+                            pan = st.text_input("PAN (auto)", value=res.get("pan", "") or "")
+                            # NOTE: We do NOT ask for client email per your request; DB column kept but left blank
                             if st.button("Save Client (Using fetched data)"):
                                 if not name:
                                     st.error("Name required")
                                 else:
-                                    add_client(name, gstin, pan, address, email)
-                                    st.success("Client saved.")
+                                    add_client(name, gstin, pan, address, email="")
+                                    st.success("Client saved (no email collected).")
                         else:
                             st.warning(f"API failed: {res.get('error')}. Fill manually below.")
                             name = st.text_input("Company Name")
                             address = st.text_area("Address")
                             gstin = st.text_input("GSTIN", value=gstin_input)
-                            pan = st.text_input("PAN")
-                            email = st.text_input("Default Email")
+                            pan = st.text_input("PAN (if any)")
                             if st.button("Save Client (Manual)"):
                                 if not name:
                                     st.error("Name required")
                                 else:
-                                    add_client(name, gstin, pan, address, email)
-                                    st.success("Client saved (manual).")
+                                    add_client(name, gstin, pan, address, email="")
+                                    st.success("Client saved (manual, no email).")
+            with c2:
+                st.info("Put Appyflow key in Streamlit secrets: [appyflow] key_secret = \"YOUR_KEY\"")
+
         with st.expander("Edit / Delete Client"):
             clients_list = get_clients()
             clients_map = {f"{c[1]} ({c[2]})": c[0] for c in clients_list}
@@ -413,20 +438,19 @@ def main():
                     cid, name, gstin, pan, address, email = rec
                     name2 = st.text_input("Company Name", value=name)
                     gstin2 = st.text_input("GSTIN", value=gstin)
-                    pan2 = st.text_input("PAN", value=pan)
+                    pan2 = st.text_input("PAN", value=pan or "")
                     address2 = st.text_area("Address", value=address)
-                    email2 = st.text_input("Default Email", value=email)
                     col1, col2 = st.columns(2)
                     with col1:
                         if st.button("Update Client"):
-                            update_client(cid, name2, gstin2, pan2, address2, email2)
+                            update_client(cid, name2, gstin2, pan2, address2, email or "")
                             st.success("Updated")
                     with col2:
                         if st.button("Delete Client"):
                             delete_client(cid)
                             st.success("Deleted")
 
-    # -------- Create Invoice --------
+    # Create Invoice
     elif mode == "Create Invoice":
         st.header("Create Invoice")
         clients = get_clients()
@@ -437,7 +461,7 @@ def main():
             cid = [c[0] for c in clients if f"{c[1]} ({c[2]})" == selected][0]
             rec = get_client_by_id(cid)
             if rec:
-                client_info = {"id": rec[0], "name": rec[1], "gstin": rec[2], "pan": rec[3], "address": rec[4], "email": rec[5]}
+                client_info = {"id": rec[0], "name": rec[1], "gstin": rec[2], "pan": rec[3], "address": rec[4]}
 
         col1, col2 = st.columns(2)
         with col1:
@@ -566,7 +590,7 @@ def main():
                     st.error("Error generating PDF. See traceback below.")
                     st.text(traceback.format_exc())
 
-    # -------- History --------
+    # History
     else:
         st.header("Invoice History")
         conn = sqlite3.connect(DB_PATH)

@@ -174,36 +174,14 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     try:
         logo_path = COMPANY.get('logo_top','')
         if logo_path and os.path.exists(logo_path):
-            logo = Image(logo_path, width=90*mm, height=30*mm)
+            logo = Image(logo_path, width=8.7*cm, height=2.52*cm)
             logo.hAlign = 'CENTER'
             story.append(logo)
     except Exception:
         pass
 
     story.append(Spacer(1,6))
-
-    # company_text (optional)
-    try:
-        cpath = COMPANY.get('company_text','')
-        if cpath and os.path.exists(cpath):
-            cimg = Image(cpath, width=page_width*0.9, height=12*mm)
-            cimg.hAlign = 'CENTER'
-            story.append(cimg)
-    except Exception:
-        pass
-
-    # tagline (optional) (also shown later near signature per request)
-    try:
-        tpath = COMPANY.get('tagline','')
-        if tpath and os.path.exists(tpath):
-            tag = Image(tpath, width=page_width*0.95, height=10*mm)
-            tag.hAlign = 'CENTER'
-            story.append(tag)
-    except Exception:
-        pass
-
     story.append(Spacer(1,6))
-    story.append(Paragraph("<b>CRUX MANAGEMENT SERVICES</b>", ParagraphStyle('title', fontSize=14, alignment=1)))
     story.append(Spacer(1,6))
 
     # Right aligned address block
@@ -324,24 +302,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
         sigpath = COMPANY.get('signature','')
         if sigpath and os.path.exists(sigpath):
             sig_img = Image(sigpath, width=50*mm, height=40*mm)
-            sig_img.hAlign = 'LEFT'
-    except Exception:
-        pass
-
-    sig_par = Paragraph("For Crux Management Services (P) Ltd<br/><br/>Authorised Signatory", styles['Normal'])
-    if sig_img:
-        story.append(KeepTogether([sig_img, Spacer(1,4), sig_par]))
-    else:
-        story.append(sig_par)
-
-    # Tagline under signature area (repeat)
-    try:
-        tpath2 = COMPANY.get('tagline','')
-        if tpath2 and os.path.exists(tpath2):
-            story.append(Spacer(1,6))
-            tag2 = Image(tpath2, width=page_width*0.6, height=9*mm)
-            tag2.hAlign = 'CENTER'
-            story.append(tag2)
+            sig_img.hAlign = 'RIGHT'
     except Exception:
         pass
 

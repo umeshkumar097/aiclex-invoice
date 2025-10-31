@@ -214,14 +214,9 @@ class HR(Flowable):
 # ---------------- PDF generation (final improved) ----------------
 def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     """
-    Improved PDF generator:
-    - Uses company images (logo_top, tagline, company_text, signature) if present in assets/
-    - Renders header with GST / PAN row, service location + invoice box
-    - Filters out empty/zero line items
-    - Creates items table with wrapping and proper column widths
-    - Calculates subtotal / taxes / total and prints In Words
-    - Footer contains only company contact (no APP_BUILT_BY)
-    - Appends supporting_df (if provided) on new pages, splitting wide tables
+    PDF generator: header = logo_top + tagline only.
+    Footer = company_text image (if present) + signature + "For CRUX..." text.
+    Removes earlier footer text. Keeps other functionality intact.
     """
     from decimal import Decimal, ROUND_HALF_UP
     from reportlab.lib.styles import ParagraphStyle
@@ -229,7 +224,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     def q(v):
         return Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-    # sanitize & filter line items: keep rows that have at least particulars or qty>0 or rate>0
+    # filter meaningful line items
     filtered_items = []
     for r in line_items:
         partic = str(r.get('particulars') or "").strip()
@@ -262,7 +257,6 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     # styles
     body_style = ParagraphStyle("body", fontSize=9, leading=11)
     title_style = ParagraphStyle("title", fontSize=16, leading=18, alignment=1)
-    small_center = ParagraphStyle("smcenter", fontSize=8, leading=9, alignment=1)
     right_style = ParagraphStyle("right", fontSize=9, leading=11, alignment=2)
     desc_style = ParagraphStyle("desc", fontSize=9, leading=11)
 
@@ -280,7 +274,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
             except Exception:
                 pass
 
-    # Header images: user-provided sizes
+    # HEADER: only logo_top and tagline (company_text removed from header)
     add_image_if(COMPANY.get('logo_top'), w_mm=87, h_mm=25.2, align='CENTER', spacer_after=2)
     add_image_if(COMPANY.get('tagline'), w_mm=164.8, h_mm=5.4, align='CENTER', spacer_after=6)
 
@@ -288,7 +282,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     story.append(Paragraph("INVOICE", title_style))
     story.append(Spacer(1,6))
 
-    # GST / PAN row: two columns
+    # GST / PAN row
     gst_html = f"<b>GST IN :</b> {COMPANY.get('gstin','')}"
     pan_html = f"<b>PAN NO :</b> {COMPANY.get('pan','')}"
     gst_pan_tbl = Table([[Paragraph(gst_html, body_style), Paragraph(pan_html, right_style)]], colWidths=[page_width*0.6, page_width*0.4])
@@ -296,10 +290,9 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     story.append(gst_pan_tbl)
     story.append(Spacer(1,6))
 
-    # Service Location (left) and Invoice details (right) in boxed table
+    # Service Location and Invoice details box (same as before)
     client = invoice_meta.get('client', {}) or {}
-    left_lines = []
-    left_lines.append("<b>Service Location</b>")
+    left_lines = ["<b>Service Location</b>"]
     if client.get('name'):
         left_lines.append(f"To M/s: {client.get('name')}")
     if client.get('address'):
@@ -311,17 +304,18 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
 
     inv_no = invoice_meta.get('invoice_no','')
     inv_date = invoice_meta.get('invoice_date','')
-    right_lines = []
-    right_lines.append(f"<b>INVOICE NO. :</b> {inv_no}")
-    right_lines.append(f"<b>DATE :</b> {inv_date}")
-    right_lines.append("<br/>")
-    right_lines.append("<b>Vendor Electronic Remittance</b>")
-    right_lines.append(f"Bank Name : {COMPANY.get('bank_name','')}")
-    right_lines.append(f"A/C No : {COMPANY.get('bank_account','')}")
-    right_lines.append(f"IFS Code : {COMPANY.get('ifsc','')}")
-    right_lines.append(f"Swift Code : {COMPANY.get('swift','')}")
-    right_lines.append(f"MICR No : {COMPANY.get('micr','')}")
-    right_lines.append(f"Branch : {COMPANY.get('branch','')}")
+    right_lines = [
+        f"<b>INVOICE NO. :</b> {inv_no}",
+        f"<b>DATE :</b> {inv_date}",
+        "<br/>",
+        "<b>Vendor Electronic Remittance</b>",
+        f"Bank Name : {COMPANY.get('bank_name','')}",
+        f"A/C No : {COMPANY.get('bank_account','')}",
+        f"IFS Code : {COMPANY.get('ifsc','')}",
+        f"Swift Code : {COMPANY.get('swift','')}",
+        f"MICR No : {COMPANY.get('micr','')}",
+        f"Branch : {COMPANY.get('branch','')}"
+    ]
     right_html = "<br/>".join(right_lines)
 
     big_box = Table([[Paragraph(left_html, body_style), Paragraph(right_html, body_style)]], colWidths=[page_width*0.55, page_width*0.45])
@@ -337,9 +331,8 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     story.append(big_box)
     story.append(Spacer(1,8))
 
-    # Items table headers
+    # Items table
     headers = ["SL.NO","PARTICULARS","DESCRIPTION of SAC CODE","SAC CODE","QTY","RATE","TAXABLE AMOUNT"]
-    # column widths tuned to fit
     col_w = [12*mm, 38*mm, (page_width - (12*mm + 38*mm + 22*mm + 14*mm + 22*mm + 26*mm)), 22*mm, 14*mm, 22*mm, 26*mm]
     for i in range(len(col_w)):
         if col_w[i] < 10*mm:
@@ -350,7 +343,6 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
         col_w = [w*scale for w in col_w]
 
     table_data = [[Paragraph(h, ParagraphStyle('h', fontSize=9, alignment=1, leading=10)) for h in headers]]
-
     for r in filtered_items:
         row = [
             Paragraph(str(r.get('slno','')), body_style),
@@ -362,7 +354,6 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
             Paragraph(f"{r.get('taxable_amount'):,}", right_style)
         ]
         table_data.append(row)
-
     if len(table_data) == 1:
         table_data.append([Paragraph("-", body_style)] + [Paragraph("-", body_style)]*(len(headers)-1))
 
@@ -439,10 +430,12 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     story.append(Paragraph("Authorised Signatory", body_style))
     story.append(Spacer(1,10))
 
-    # Footer: only company contact (no APP_BUILT_BY)
-   if COMPANY.get('company_text') and os.path.exists(COMPANY.get('company_text')):
+    # FOOTER: add company_text image at footer (instead of footer text). If not present, footer will be minimal.
+    # place company_text image centered near bottom
+    if COMPANY.get('company_text') and os.path.exists(COMPANY.get('company_text')):
         add_image_if(COMPANY.get('company_text'), w_mm=177, h_mm=27.2, align='CENTER', spacer_after=4)
     # (no plain footer text with "Built by Aiclex" or contact)
+
     # Supporting dataframe - add on new page(s) if provided
     if supporting_df is not None and not supporting_df.empty:
         try:

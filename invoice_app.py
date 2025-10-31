@@ -370,7 +370,7 @@ def main():
             gstin_input = st.text_input("GSTIN (enter first to auto-fetch)", value="", max_chars=15)
             c1, c2 = st.columns([1, 1])
             with c1:
-                if st.button("Fetch details from GST API"):
+                if st.button("Fetch details"):
                     if not gstin_input.strip():
                         st.error("Please enter GSTIN first.")
                     else:

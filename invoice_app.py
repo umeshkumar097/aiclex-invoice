@@ -25,15 +25,19 @@ from reportlab.platypus import (
     Image, PageBreak, Flowable
 )
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 # ---------------- App constants ----------------
 APP_TITLE = "Crux Invoice Management System"
-APP_BUILT_BY = "Built by Aiclex Technologies"  # shown in app UI caption only
+APP_BUILT_BY = "Built by Aiclex Technologies"
 DB_PATH = "invoices.db"
 PDF_DIR = "generated_pdfs"
+ASSETS_DIR = "assets"
 os.makedirs(PDF_DIR, exist_ok=True)
+os.makedirs(ASSETS_DIR, exist_ok=True)
 
-# ---------------- Company & asset paths (.jpg) ----------------
+# ---------------- Company & asset paths (.jpg / .ttf) ----------------
 COMPANY = {
     "name": "CRUX MANAGEMENT SERVICES (P) LTD",
     "gstin": "36AABCC4754D1ZX",
@@ -47,26 +51,109 @@ COMPANY = {
     "branch": "LAKDIKAPUL, HYD-004",
     "address": "#403, 4th Floor, Diamond Block, Lumbini Rockdale, Somajiguda, Hyderabad - 500082, Telangana",
     "email": "mailadmin@cruxmanagement.com",
-    "logo_top": "assets/logo_top.jpg",
-    "company_text": "assets/company_text.jpg",
-    "tagline": "assets/tagline.jpg",
-    "signature": "assets/signature_stamp.jpg"
+    "logo_top": os.path.join(ASSETS_DIR, "logo_top.jpg"),
+    "company_text": os.path.join(ASSETS_DIR, "company_text.jpg"),
+    "tagline": os.path.join(ASSETS_DIR, "tagline.jpg"),
+    "signature": os.path.join(ASSETS_DIR, "signature_stamp.jpg"),
+    # Calibri TTF path (place your TTF here for exact font)
+    "calibri_ttf": os.path.join(ASSETS_DIR, "Calibri.ttf")
 }
+
+# ---------------- Register Calibri (fallback if missing) ----------------
+FONT_NAME = "Helvetica"
+if os.path.exists(COMPANY["calibri_ttf"]):
+    try:
+        pdfmetrics.registerFont(TTFont("Calibri", COMPANY["calibri_ttf"]))
+        FONT_NAME = "Calibri"
+    except Exception:
+        FONT_NAME = "Helvetica"
+else:
+    # fallback, Helvetica is default
+    FONT_NAME = "Helvetica"
 
 # ---------------- Styles ----------------
 base_styles = getSampleStyleSheet()
+
 # Body (table cells) font size 9
-BODY_STYLE = ParagraphStyle("body", parent=base_styles["Normal"], fontSize=9, leading=11)
-# Header (table header) font size 11
-HEADER_STYLE = ParagraphStyle("header", parent=base_styles["Normal"], fontSize=11, leading=12, alignment=1)
+BODY_STYLE = ParagraphStyle(
+    "body",
+    parent=base_styles["Normal"],
+    fontName=FONT_NAME,
+    fontSize=9,
+    leading=11
+)
+
+# Header (table header) font size 11 (bold)
+HEADER_STYLE = ParagraphStyle(
+    "header",
+    parent=base_styles["Normal"],
+    fontName=FONT_NAME,
+    fontSize=11,
+    leading=12,
+    alignment=1
+)
+
 # Title
-TITLE_STYLE = ParagraphStyle("title", parent=base_styles["Heading1"], fontSize=16, leading=18, alignment=1)
-# Right aligned small
-RIGHT_STYLE = ParagraphStyle("right", parent=base_styles["Normal"], fontSize=9, leading=11, alignment=2)
+TITLE_STYLE = ParagraphStyle(
+    "title",
+    parent=base_styles["Heading1"],
+    fontName=FONT_NAME,
+    fontSize=16,
+    leading=18,
+    alignment=1
+)
+
+# Right aligned small (body)
+RIGHT_STYLE = ParagraphStyle(
+    "right",
+    parent=base_styles["Normal"],
+    fontName=FONT_NAME,
+    fontSize=9,
+    leading=11,
+    alignment=2
+)
+
 # Description (wrap)
-DESC_STYLE = ParagraphStyle("desc", parent=base_styles["Normal"], fontSize=9, leading=11)
-# Footer
-FOOTER_STYLE = ParagraphStyle("footer", parent=base_styles["Normal"], fontSize=7, leading=8, alignment=1)
+DESC_STYLE = ParagraphStyle(
+    "desc",
+    parent=base_styles["Normal"],
+    fontName=FONT_NAME,
+    fontSize=9,
+    leading=11
+)
+
+# Totals label bold
+TOTAL_LABEL_STYLE = ParagraphStyle(
+    "tot_label",
+    parent=base_styles["Normal"],
+    fontName=FONT_NAME,
+    fontSize=10,
+    leading=12,
+    alignment=0,
+    spaceBefore=2,
+    spaceAfter=2
+)
+
+TOTAL_VALUE_STYLE = ParagraphStyle(
+    "tot_val",
+    parent=base_styles["Normal"],
+    fontName=FONT_NAME,
+    fontSize=10,
+    leading=12,
+    alignment=2,
+    spaceBefore=2,
+    spaceAfter=2
+)
+
+# Footer small
+FOOTER_STYLE = ParagraphStyle(
+    "footer",
+    parent=base_styles["Normal"],
+    fontName=FONT_NAME,
+    fontSize=7,
+    leading=8,
+    alignment=1
+)
 
 # ---------------- Helpers ----------------
 def money(v):
@@ -95,7 +182,6 @@ def gst_state_code(gstin):
         return None
 
 def safe_rerun():
-    # Streamlit API changed in versions; use attribute check
     if hasattr(st, "experimental_rerun"):
         try:
             st.experimental_rerun()
@@ -181,7 +267,6 @@ def fetch_gst_from_appyflow(gstin, timeout=10):
     except Exception as e:
         return {"ok": False, "error": f"Request failed: {e}"}
 
-    # Parse response
     if isinstance(j, dict) and ("taxpayerInfo" in j or j.get("error") is False or j.get("status") == "success"):
         info = j.get("taxpayerInfo") or j.get("taxpayerinfo") or j.get("taxpayer") or j
         name = info.get("tradeNam") or info.get("lgnm") or info.get("tradeName") or info.get("name") or ""
@@ -220,16 +305,8 @@ class HR(Flowable):
         self.canv.setStrokeColor(self.color)
         self.canv.line(0,0,self.width,0)
 
-# ---------------- PDF generation (with header fonts 11 / body fonts 9) ----------------
+# ---------------- PDF generation (Calibri + styled totals) ----------------
 def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
-    """
-    PDF generator:
-    - Table header font size = 11
-    - Table body font size = 9
-    - Header: logo_top + tagline only
-    - Footer: company_text image (if available) instead of plain text
-    - Filters empty rows
-    """
     from decimal import Decimal, ROUND_HALF_UP
     from reportlab.lib.styles import ParagraphStyle
 
@@ -337,11 +414,9 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     story.append(big_box)
     story.append(Spacer(1,8))
 
-    # Items table
+    # Items table - header 11, body 9
     headers = ["SL.NO","PARTICULARS","DESCRIPTION of SAC CODE","SAC CODE","QTY","RATE","TAXABLE AMOUNT"]
-    # column widths tuned to fit
     col_w = [12*mm, 45*mm, (page_width - (12*mm + 45*mm + 22*mm + 14*mm + 22*mm + 26*mm)), 22*mm, 14*mm, 22*mm, 26*mm]
-    # ensure minimums
     for i in range(len(col_w)):
         if col_w[i] < 10*mm:
             col_w[i] = 10*mm
@@ -350,10 +425,8 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
         scale = page_width / total_w
         col_w = [w*scale for w in col_w]
 
-    # header row with size 11
     table_data = [[Paragraph(h, HEADER_STYLE) for h in headers]]
 
-    # rows
     for r in filtered_items:
         row = [
             Paragraph(str(r.get('slno','')), BODY_STYLE),
@@ -384,7 +457,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     story.append(items_tbl)
     story.append(Spacer(1,8))
 
-    # Totals calculation
+    # Totals calculation and styled block
     subtotal = q(sum([r['taxable_amount'] for r in filtered_items])) if filtered_items else q(0)
     adv = q(invoice_meta.get('advance_received', 0) or 0)
 
@@ -405,25 +478,29 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     total = subtotal + sgst + cgst + igst
     net = (total - adv).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-    # totals table - right aligned
-    totals = []
-    totals.append([Paragraph("Sub Total", BODY_STYLE), Paragraph(f"Rs. {subtotal:,.2f}", RIGHT_STYLE)])
+    # Build totals table rows with improved visuals
+    totals_rows = []
+    totals_rows.append([Paragraph("Sub Total", TOTAL_LABEL_STYLE), Paragraph(f"Rs. {subtotal:,.2f}", TOTAL_VALUE_STYLE)])
     if use_igst:
-        totals.append([Paragraph("IGST (18%)", BODY_STYLE), Paragraph(f"Rs. {igst:,.2f}", RIGHT_STYLE)])
+        totals_rows.append([Paragraph("IGST (18%)", TOTAL_LABEL_STYLE), Paragraph(f"Rs. {igst:,.2f}", TOTAL_VALUE_STYLE)])
     else:
-        totals.append([Paragraph("SGST (9%)", BODY_STYLE), Paragraph(f"Rs. {sgst:,.2f}", RIGHT_STYLE)])
-        totals.append([Paragraph("CGST (9%)", BODY_STYLE), Paragraph(f"Rs. {cgst:,.2f}", RIGHT_STYLE)])
+        totals_rows.append([Paragraph("SGST (9%)", TOTAL_LABEL_STYLE), Paragraph(f"Rs. {sgst:,.2f}", TOTAL_VALUE_STYLE)])
+        totals_rows.append([Paragraph("CGST (9%)", TOTAL_LABEL_STYLE), Paragraph(f"Rs. {cgst:,.2f}", TOTAL_VALUE_STYLE)])
     if adv > 0:
-        totals.append([Paragraph("Less Advance Received", BODY_STYLE), Paragraph(f"Rs. {adv:,.2f}", RIGHT_STYLE)])
-    totals.append([Paragraph("<b>TOTAL</b>", BODY_STYLE), Paragraph(f"<b>Rs. {net:,.2f}</b>", RIGHT_STYLE)])
+        totals_rows.append([Paragraph("Less Advance Received", TOTAL_LABEL_STYLE), Paragraph(f"Rs. {adv:,.2f}", TOTAL_VALUE_STYLE)])
+    # TOTAL row - bold label and value
+    totals_rows.append([Paragraph("<b>TOTAL</b>", ParagraphStyle("tot_bold_label", fontName=FONT_NAME, fontSize=11, leading=13)), Paragraph(f"<b>Rs. {net:,.2f}</b>", ParagraphStyle("tot_bold_val", fontName=FONT_NAME, fontSize=11, leading=13, alignment=2))])
 
-    tot_tbl = Table(totals, colWidths=[page_width*0.65, page_width*0.35], hAlign='RIGHT')
+    tot_tbl = Table(totals_rows, colWidths=[page_width*0.65, page_width*0.35], hAlign='RIGHT')
     tot_tbl.setStyle(TableStyle([
-        ('LINEBEFORE',(0,0),(0,-1),0.25,colors.white),
-        ('LINEABOVE',(0,-1),(-1,-1),0.75,colors.black),
+        ('INNERGRID',(0,0),(-1,-2),0.25,colors.lightgrey),
+        ('LINEABOVE',(0,-1),(-1,-1),0.8,colors.black),
+        ('BACKGROUND', (0,-1), (-1,-1), colors.lightgrey),
         ('ALIGN',(1,0),(1,-1),'RIGHT'),
         ('LEFTPADDING',(0,0),(-1,-1),6),
         ('RIGHTPADDING',(0,0),(-1,-1),6),
+        ('TOPPADDING',(0,0),(-1,-1),4),
+        ('BOTTOMPADDING',(0,0),(-1,-1),4),
     ]))
     story.append(tot_tbl)
     story.append(Spacer(1,8))
@@ -448,9 +525,8 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     # FOOTER: company_text image centered (instead of plain footer text)
     if COMPANY.get('company_text') and os.path.exists(COMPANY.get('company_text')):
         add_image_if(COMPANY.get('company_text'), w_mm=177, h_mm=27.2, align='CENTER', spacer_after=4)
-    # (no "Built by Aiclex" in PDF)
 
-    # Supporting dataframe page(s)
+    # Supporting dataframe pages
     if supporting_df is not None and not supporting_df.empty:
         try:
             df = supporting_df.fillna("").astype(str)
@@ -463,13 +539,13 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
             for start in range(0, len(cols), max_cols):
                 subset_cols = cols[start:start+max_cols]
                 sub_df = df[subset_cols]
-                header_row = [Paragraph(str(c), ParagraphStyle('sh', fontSize=9, leading=10, alignment=1)) for c in sub_df.columns]
+                header_row = [Paragraph(str(c), ParagraphStyle('sh', fontName=FONT_NAME, fontSize=9, leading=10, alignment=1)) for c in sub_df.columns]
                 table_rows = [header_row]
                 for _, row in sub_df.iterrows():
                     row_cells = []
                     for c in sub_df.columns:
                         txt = " ".join(str(row[c]).split())
-                        row_cells.append(Paragraph(txt, ParagraphStyle('cell', fontSize=7, leading=8)))
+                        row_cells.append(Paragraph(txt, ParagraphStyle('cell', fontName=FONT_NAME, fontSize=7, leading=8)))
                     table_rows.append(row_cells)
                 colw = [page_width / len(subset_cols) for _ in subset_cols]
                 sup_tbl = Table(table_rows, colWidths=colw, repeatRows=1)

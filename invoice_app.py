@@ -393,7 +393,7 @@ def main():
             gstin_input = st.text_input("GSTIN (enter first to auto-fetch)", value="", max_chars=15)
             c1, c2 = st.columns([1, 1])
             with c1:
-                if st.button("Fetch details from GST API"):
+                if st.button("Fetch details"):
                     if not gstin_input.strip():
                         st.error("Please enter GSTIN first.")
                     else:
@@ -406,7 +406,7 @@ def main():
                             gstin = st.text_input("GSTIN", value=res.get("gstin", gstin_input))
                             pan = st.text_input("PAN (auto)", value=res.get("pan", "") or "")
                             # NOTE: We do NOT ask for client email per your request; DB column kept but left blank
-                            if st.button("Save Client (Using fetched data)"):
+                            if st.button("Save Client"):
                                 if not name:
                                     st.error("Name required")
                                 else:
@@ -424,9 +424,6 @@ def main():
                                 else:
                                     add_client(name, gstin, pan, address, email="")
                                     st.success("Client saved (manual, no email).")
-            with c2:
-                st.info("Put Appyflow key in Streamlit secrets: [appyflow] key_secret = \"YOUR_KEY\"")
-
         with st.expander("Edit / Delete Client"):
             clients_list = get_clients()
             clients_map = {f"{c[1]} ({c[2]})": c[0] for c in clients_list}

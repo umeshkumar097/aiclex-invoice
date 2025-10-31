@@ -1,5 +1,5 @@
 # invoice_app.py
-# Crux Invoice Management System (with bulk client upload + verification)
+# Crux Invoice Management System
 # Built by Aiclex Technologies
 #
 # Requirements:
@@ -14,9 +14,6 @@ import traceback
 import requests
 from num2words import num2words
 from decimal import Decimal, ROUND_HALF_UP
-from math import ceil
-import io
-import csv
 import time
 
 # ReportLab
@@ -31,7 +28,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 
 # ---------------- App constants ----------------
 APP_TITLE = "Crux Invoice Management System"
-APP_BUILT_BY = "Built by Aiclex Technologies"
+APP_BUILT_BY = "Built by Aiclex Technologies"  # shown in app UI caption only
 DB_PATH = "invoices.db"
 PDF_DIR = "generated_pdfs"
 os.makedirs(PDF_DIR, exist_ok=True)
@@ -175,7 +172,7 @@ def fetch_gst_from_appyflow(gstin, timeout=10):
     except Exception as e:
         return {"ok": False, "error": f"Request failed: {e}"}
 
-    # Parse
+    # Parse response
     if isinstance(j, dict) and ("taxpayerInfo" in j or j.get("error") is False or j.get("status") == "success"):
         info = j.get("taxpayerInfo") or j.get("taxpayerinfo") or j.get("taxpayer") or j
         name = info.get("tradeNam") or info.get("lgnm") or info.get("tradeName") or info.get("name") or ""
@@ -204,7 +201,7 @@ def fetch_gst_from_appyflow(gstin, timeout=10):
         msg = j.get("message") if isinstance(j, dict) else str(j)
         return {"ok": False, "error": msg or "API returned error"}
 
-# ---------------- HR Flowable ----------------
+# ---------------- HR Flowable (line) ----------------
 class HR(Flowable):
     def __init__(self, width, thickness=1, color=colors.black):
         Flowable.__init__(self)
@@ -214,37 +211,282 @@ class HR(Flowable):
         self.canv.setStrokeColor(self.color)
         self.canv.line(0,0,self.width,0)
 
-# ---------------- PDF generation (use your improved function here) ----------------
-# For brevity, add the improved generate_invoice_pdf function from earlier messages.
-# (Paste the full generate_invoice_pdf implementation you prefer here.)
+# ---------------- PDF generation (final improved) ----------------
 def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
-    # Minimal PDF generator (replace with your improved function if you have it)
+    """
+    Improved PDF generator:
+    - Uses company images (logo_top, tagline, company_text, signature) if present in assets/
+    - Renders header with GST / PAN row, service location + invoice box
+    - Filters out empty/zero line items
+    - Creates items table with wrapping and proper column widths
+    - Calculates subtotal / taxes / total and prints In Words
+    - Footer contains only company contact (no APP_BUILT_BY)
+    - Appends supporting_df (if provided) on new pages, splitting wide tables
+    """
     from decimal import Decimal, ROUND_HALF_UP
+    from reportlab.lib.styles import ParagraphStyle
+
+    def q(v):
+        return Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    # sanitize & filter line items: keep rows that have at least particulars or qty>0 or rate>0
+    filtered_items = []
+    for r in line_items:
+        partic = str(r.get('particulars') or "").strip()
+        try:
+            qty = float(r.get('qty') or 0)
+        except:
+            qty = 0.0
+        try:
+            rate = float(r.get('rate') or 0)
+        except:
+            rate = 0.0
+        if partic or qty != 0 or rate != 0:
+            filtered_items.append({
+                "slno": r.get('slno') or "",
+                "particulars": partic,
+                "description": str(r.get('description') or ""),
+                "sac_code": str(r.get('sac_code') or ""),
+                "qty": int(qty),
+                "rate": q(rate),
+                "taxable_amount": q(qty * rate)
+            })
+
     filename = f"Invoice_{invoice_meta.get('invoice_no','NA')}_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
     path = os.path.join(PDF_DIR, filename)
-    doc = SimpleDocTemplate(path, pagesize=A4, leftMargin=15*mm, rightMargin=15*mm, topMargin=15*mm, bottomMargin=15*mm)
+
+    doc = SimpleDocTemplate(path, pagesize=A4, leftMargin=12*mm, rightMargin=12*mm, topMargin=12*mm, bottomMargin=12*mm)
     story = []
-    story.append(Paragraph("INVOICE (Sample)", styles['title_center']))
-    story.append(Spacer(1,12))
-    story.append(Paragraph(f"Invoice No: {invoice_meta.get('invoice_no')}", styles['wrap']))
-    story.append(Paragraph(f"Client: {invoice_meta.get('client',{}).get('name','')}", styles['wrap']))
-    story.append(Spacer(1,12))
-    data = [["S.No","Particulars","Qty","Rate","Amount"]]
-    for r in line_items:
-        amt = float(r.get('qty',0)) * float(r.get('rate',0))
-        data.append([str(r.get('slno','')), r.get('particulars',''), str(r.get('qty','')), str(r.get('rate','')), f"Rs. {amt:.2f}"])
-    t = Table(data)
-    t.setStyle(TableStyle([('GRID',(0,0),(-1,-1),0.25,colors.black)]))
-    story.append(t)
+    page_width = A4[0] - (12*mm + 12*mm)
+
+    # styles
+    body_style = ParagraphStyle("body", fontSize=9, leading=11)
+    title_style = ParagraphStyle("title", fontSize=16, leading=18, alignment=1)
+    small_center = ParagraphStyle("smcenter", fontSize=8, leading=9, alignment=1)
+    right_style = ParagraphStyle("right", fontSize=9, leading=11, alignment=2)
+    desc_style = ParagraphStyle("desc", fontSize=9, leading=11)
+
+    # helper to add image if exists
+    def add_image_if(path, w_mm=None, h_mm=None, align='CENTER', spacer_after=4):
+        if path and os.path.exists(path):
+            try:
+                w = (w_mm*mm) if w_mm else None
+                h = (h_mm*mm) if h_mm else None
+                img = Image(path, width=w, height=h) if (w and h) else Image(path)
+                img.hAlign = align
+                story.append(img)
+                if spacer_after:
+                    story.append(Spacer(1, spacer_after))
+            except Exception:
+                pass
+
+    # Header images: user-provided sizes
+    add_image_if(COMPANY.get('logo_top'), w_mm=87, h_mm=25.2, align='CENTER', spacer_after=2)
+    add_image_if(COMPANY.get('tagline'), w_mm=164.8, h_mm=5.4, align='CENTER', spacer_after=6)
+    add_image_if(COMPANY.get('company_text'), w_mm=177, h_mm=27.2, align='CENTER', spacer_after=6)
+
+    # Title row
+    story.append(Paragraph("INVOICE", title_style))
+    story.append(Spacer(1,6))
+
+    # GST / PAN row: two columns
+    gst_html = f"<b>GST IN :</b> {COMPANY.get('gstin','')}"
+    pan_html = f"<b>PAN NO :</b> {COMPANY.get('pan','')}"
+    gst_pan_tbl = Table([[Paragraph(gst_html, body_style), Paragraph(pan_html, right_style)]], colWidths=[page_width*0.6, page_width*0.4])
+    gst_pan_tbl.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'), ('BOTTOMPADDING',(0,0),(-1,-1),6)]))
+    story.append(gst_pan_tbl)
+    story.append(Spacer(1,6))
+
+    # Service Location (left) and Invoice details (right) in boxed table
+    client = invoice_meta.get('client', {}) or {}
+    left_lines = []
+    left_lines.append("<b>Service Location</b>")
+    if client.get('name'):
+        left_lines.append(f"To M/s: {client.get('name')}")
+    if client.get('address'):
+        addr = str(client.get('address')).replace("\n", "<br/>")
+        left_lines.append(addr)
+    left_lines.append("<br/>")
+    left_lines.append(f"<b>GSTIN NO:</b> {client.get('gstin','')}")
+    left_html = "<br/>".join(left_lines)
+
+    inv_no = invoice_meta.get('invoice_no','')
+    inv_date = invoice_meta.get('invoice_date','')
+    right_lines = []
+    right_lines.append(f"<b>INVOICE NO. :</b> {inv_no}")
+    right_lines.append(f"<b>DATE :</b> {inv_date}")
+    right_lines.append("<br/>")
+    right_lines.append("<b>Vendor Electronic Remittance</b>")
+    right_lines.append(f"Bank Name : {COMPANY.get('bank_name','')}")
+    right_lines.append(f"A/C No : {COMPANY.get('bank_account','')}")
+    right_lines.append(f"IFS Code : {COMPANY.get('ifsc','')}")
+    right_lines.append(f"Swift Code : {COMPANY.get('swift','')}")
+    right_lines.append(f"MICR No : {COMPANY.get('micr','')}")
+    right_lines.append(f"Branch : {COMPANY.get('branch','')}")
+    right_html = "<br/>".join(right_lines)
+
+    big_box = Table([[Paragraph(left_html, body_style), Paragraph(right_html, body_style)]], colWidths=[page_width*0.55, page_width*0.45])
+    big_box.setStyle(TableStyle([
+        ('BOX',(0,0),(-1,-1),0.6,colors.black),
+        ('INNERGRID',(0,0),(-1,-1),0.25,colors.grey),
+        ('VALIGN',(0,0),(-1,-1),'TOP'),
+        ('LEFTPADDING',(0,0),(-1,-1),6),
+        ('RIGHTPADDING',(0,0),(-1,-1),6),
+        ('BOTTOMPADDING',(0,0),(-1,-1),6),
+        ('TOPPADDING',(0,0),(-1,-1),6),
+    ]))
+    story.append(big_box)
+    story.append(Spacer(1,8))
+
+    # Items table headers
+    headers = ["SL.NO","PARTICULARS","DESCRIPTION of SAC CODE","SAC CODE","QTY","RATE","TAXABLE AMOUNT"]
+    # column widths tuned to fit
+    col_w = [12*mm, 38*mm, (page_width - (12*mm + 38*mm + 22*mm + 14*mm + 22*mm + 26*mm)), 22*mm, 14*mm, 22*mm, 26*mm]
+    for i in range(len(col_w)):
+        if col_w[i] < 10*mm:
+            col_w[i] = 10*mm
+    total_w = sum(col_w)
+    if total_w > page_width:
+        scale = page_width / total_w
+        col_w = [w*scale for w in col_w]
+
+    table_data = [[Paragraph(h, ParagraphStyle('h', fontSize=9, alignment=1, leading=10)) for h in headers]]
+
+    for r in filtered_items:
+        row = [
+            Paragraph(str(r.get('slno','')), body_style),
+            Paragraph(r.get('particulars',''), body_style),
+            Paragraph(r.get('description',''), desc_style),
+            Paragraph(r.get('sac_code',''), body_style),
+            Paragraph(str(r.get('qty','')), right_style),
+            Paragraph(f"{r.get('rate'):,}", right_style),
+            Paragraph(f"{r.get('taxable_amount'):,}", right_style)
+        ]
+        table_data.append(row)
+
+    if len(table_data) == 1:
+        table_data.append([Paragraph("-", body_style)] + [Paragraph("-", body_style)]*(len(headers)-1))
+
+    items_tbl = Table(table_data, colWidths=col_w, repeatRows=1)
+    items_tbl.setStyle(TableStyle([
+        ('GRID',(0,0),(-1,-1),0.25,colors.black),
+        ('BACKGROUND',(0,0),(-1,0),colors.whitesmoke),
+        ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+        ('ALIGN',(0,0),(0,-1),'CENTER'),
+        ('ALIGN',(-3,1),(-1,-1),'RIGHT'),
+        ('LEFTPADDING',(0,0),(-1,-1),4),
+        ('RIGHTPADDING',(0,0),(-1,-1),4),
+        ('TOPPADDING',(0,0),(-1,-1),4),
+        ('BOTTOMPADDING',(0,0),(-1,-1),4),
+    ]))
+    story.append(items_tbl)
+    story.append(Spacer(1,8))
+
+    # Totals
+    subtotal = q(sum([r['taxable_amount'] for r in filtered_items])) if filtered_items else q(0)
+    adv = q(invoice_meta.get('advance_received', 0) or 0)
+
+    comp_state = gst_state_code(COMPANY.get('gstin','') or "")
+    cli_state = gst_state_code(client.get('gstin','') or "")
+    use_igst = invoice_meta.get('use_igst', False)
+    if comp_state and cli_state and comp_state != cli_state:
+        use_igst = True
+
+    if use_igst:
+        igst = (subtotal * Decimal('0.18')).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        sgst = cgst = Decimal('0.00')
+    else:
+        sgst = (subtotal * Decimal('0.09')).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        cgst = (subtotal * Decimal('0.09')).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        igst = Decimal('0.00')
+
+    total = subtotal + sgst + cgst + igst
+    net = (total - adv).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    totals = []
+    totals.append([Paragraph("Sub Total", body_style), Paragraph(f"Rs. {subtotal:,.2f}", right_style)])
+    if use_igst:
+        totals.append([Paragraph("IGST (18%)", body_style), Paragraph(f"Rs. {igst:,.2f}", right_style)])
+    else:
+        totals.append([Paragraph("SGST (9%)", body_style), Paragraph(f"Rs. {sgst:,.2f}", right_style)])
+        totals.append([Paragraph("CGST (9%)", body_style), Paragraph(f"Rs. {cgst:,.2f}", right_style)])
+    if adv > 0:
+        totals.append([Paragraph("Less Advance Received", body_style), Paragraph(f"Rs. {adv:,.2f}", right_style)])
+    totals.append([Paragraph("<b>TOTAL</b>", body_style), Paragraph(f"<b>Rs. {net:,.2f}</b>", right_style)])
+
+    tot_tbl = Table(totals, colWidths=[page_width*0.65, page_width*0.35], hAlign='RIGHT')
+    tot_tbl.setStyle(TableStyle([
+        ('GRID',(0,0),(-1,-1),0.25,colors.grey),
+        ('ALIGN',(1,0),(1,-1),'RIGHT'),
+        ('BACKGROUND',(0,-1),(-1,-1),colors.whitesmoke)
+    ]))
+    story.append(tot_tbl)
+    story.append(Spacer(1,8))
+
+    # In words
+    story.append(Paragraph(f"In Words : ( {rupees_in_words(net)} )", body_style))
+    story.append(Spacer(1,10))
+
+    # Signature image + text
+    if COMPANY.get('signature') and os.path.exists(COMPANY.get('signature')):
+        try:
+            sig = Image(COMPANY['signature'], width=44.6*mm, height=31.3*mm)
+            sig.hAlign = 'LEFT'
+            story.append(sig)
+            story.append(Spacer(1,4))
+        except Exception:
+            pass
+    story.append(Paragraph("For " + COMPANY.get('name', ''), body_style))
+    story.append(Paragraph("Authorised Signatory", body_style))
+    story.append(Spacer(1,10))
+
+    # Footer: only company contact (no APP_BUILT_BY)
+    footer_text = f"{COMPANY.get('address','')} | Phone: {COMPANY.get('phone','')} | Email: {COMPANY.get('email','')}"
+    story.append(Spacer(1,6))
+    story.append(Paragraph(footer_text, ParagraphStyle('ftr', fontSize=7, alignment=1, leading=8)))
+
+    # Supporting dataframe - add on new page(s) if provided
+    if supporting_df is not None and not supporting_df.empty:
+        try:
+            df = supporting_df.fillna("").astype(str)
+            story.append(PageBreak())
+            story.append(Paragraph("Supporting Documents / Excel data", title_style))
+            story.append(Spacer(1,6))
+
+            cols = list(df.columns)
+            max_cols = 10
+            for start in range(0, len(cols), max_cols):
+                subset_cols = cols[start:start+max_cols]
+                sub_df = df[subset_cols]
+                header_row = [Paragraph(str(c), ParagraphStyle('h', fontSize=8, alignment=1)) for c in sub_df.columns]
+                table_rows = [header_row]
+                for _, row in sub_df.iterrows():
+                    row_cells = []
+                    for c in sub_df.columns:
+                        txt = " ".join(str(row[c]).split())
+                        row_cells.append(Paragraph(txt, ParagraphStyle('cell', fontSize=7, leading=8)))
+                    table_rows.append(row_cells)
+                colw = [page_width / len(subset_cols) for _ in subset_cols]
+                sup_tbl = Table(table_rows, colWidths=colw, repeatRows=1)
+                sup_tbl.setStyle(TableStyle([
+                    ('GRID',(0,0),(-1,-1),0.25,colors.grey),
+                    ('BACKGROUND',(0,0),(-1,0),colors.whitesmoke),
+                    ('VALIGN',(0,0),(-1,-1),'TOP'),
+                    ('LEFTPADDING',(0,0),(-1,-1),2),
+                    ('RIGHTPADDING',(0,0),(-1,-1),2),
+                ]))
+                story.append(sup_tbl)
+                story.append(Spacer(1,8))
+        except Exception as e:
+            story.append(Paragraph("Error rendering supporting sheet: " + str(e), body_style))
+
     doc.build(story)
     return path
 
 # ---------------- Bulk processing helpers ----------------
 def normalize_uploaded_df(df):
-    # Ensure columns lower-case keys for easier mapping
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
-    # common column names mapping
     lower = {c.lower(): c for c in df.columns}
     mapping = {}
     for expected in ("gstin","gst","gst_no","gst_no.","gst_no","gst number"):
@@ -259,12 +501,8 @@ def normalize_uploaded_df(df):
     for expected in ("pan","pan_no","panno"):
         if expected in lower:
             mapping['pan'] = lower[expected]; break
-
-    # If gstin not found but first column looks like GSTIN, assume first column
     if 'gstin' not in mapping:
         mapping['gstin'] = df.columns[0] if len(df.columns) > 0 else None
-
-    # Build a standard df with columns gstin,name,address,pan
     out_rows = []
     for _, row in df.iterrows():
         gstin_val = row.get(mapping.get('gstin')) if mapping.get('gstin') else ''
@@ -280,12 +518,6 @@ def normalize_uploaded_df(df):
     return pd.DataFrame(out_rows)
 
 def bulk_verify_and_prepare(df, verify_with_api=True, delay_between_calls=0.2, show_progress=True):
-    """
-    df: DataFrame with columns gstin,name,address,pan (normalized)
-    verify_with_api: if True, call GST API for each gstin
-    Returns a DataFrame with columns: gstin, name, address, pan, status, error
-    status: "OK" if verified (or verification skipped but initial data present), "Failed" if verification failed
-    """
     results = []
     total = len(df)
     progress = None
@@ -313,11 +545,9 @@ def bulk_verify_and_prepare(df, verify_with_api=True, delay_between_calls=0.2, s
                     res_pan = api_res.get("pan","") or given_pan
                     status = "OK"
                 else:
-                    # verification failed — keep given values for manual review
                     status = "Failed"
                     error = api_res.get("error","API failed")
             else:
-                # No verification, accept provided values
                 res_name = given_name
                 res_addr = given_addr
                 res_pan = given_pan if given_pan else (gstin[2:12].upper() if len(gstin)>=12 else "")
@@ -332,7 +562,6 @@ def bulk_verify_and_prepare(df, verify_with_api=True, delay_between_calls=0.2, s
         })
         if show_progress:
             progress.progress(int((i+1)/total * 100))
-        # delay lightly to avoid hammering API
         if verify_with_api:
             time.sleep(delay_between_calls)
     if show_progress:
@@ -340,10 +569,6 @@ def bulk_verify_and_prepare(df, verify_with_api=True, delay_between_calls=0.2, s
     return pd.DataFrame(results)
 
 def add_successful_results_to_db(results_df, only_status="OK"):
-    """
-    Add rows with results_df['status']==only_status to DB.
-    Returns (added_count, failed_list)
-    """
     added = 0
     failed = []
     for _, row in results_df.iterrows():
@@ -441,7 +666,6 @@ def main():
                 with st.spinner("Fetching from GST API..."):
                     res = fetch_gst_from_appyflow(gst_fetch)
                 st.session_state._last_gst_fetch = res
-        # If fetch result exists, show save option (not nested)
         last = st.session_state.get("_last_gst_fetch")
         if last:
             if last.get("ok"):
@@ -477,7 +701,6 @@ def main():
                     df_raw = pd.read_excel(uploaded, dtype=str)
                 st.success(f"File loaded: {uploaded.name} (rows: {len(df_raw)})")
                 st.dataframe(df_raw.head(10))
-                # Normalize
                 df_norm = normalize_uploaded_df(df_raw)
                 st.session_state._bulk_df = df_norm
             except Exception as e:
@@ -489,17 +712,14 @@ def main():
             st.markdown("**Preview (normalized)**")
             st.dataframe(bulk_df.head(20))
 
-            # Options
             col1, col2 = st.columns(2)
             with col1:
                 verify_api = st.checkbox("Verify each GST using GST API (appyflow)", value=True)
             with col2:
                 crux_mode = st.checkbox("Crux Team Mode (auto-add verified to DB)", value=False)
 
-            # Process button
             if st.button("Process & Verify (bulk)"):
                 if verify_api:
-                    # check api key
                     key_present = False
                     try:
                         if st.secrets and st.secrets.get("appyflow") and st.secrets["appyflow"].get("key_secret"):
@@ -517,12 +737,10 @@ def main():
             results = st.session_state.get("_bulk_results")
             if results is not None:
                 st.markdown("**Verification Results**")
-                # Provide download
                 csv_bytes = results.to_csv(index=False).encode('utf-8')
                 st.download_button("Download results CSV", data=csv_bytes, file_name=f"bulk_results_{datetime.now().strftime('%Y%m%d%H%M%S')}.csv", mime="text/csv")
                 st.dataframe(results)
 
-                # Buttons to add successful ones
                 colA, colB, colC = st.columns(3)
                 with colA:
                     if st.button("Add All OK to DB"):
@@ -531,10 +749,8 @@ def main():
                         if failed:
                             msg += f" {len(failed)} failed to add."
                         st.success(msg)
-                        # refresh clients listing
                         safe_rerun()
                 with colB:
-                    # allow selection of rows to add manually via checkboxes
                     st.write("Add selected rows:")
                     sel_idx = st.multiselect("Select row indices to add (0-based)", options=list(results.index))
                     if st.button("Add selected rows"):

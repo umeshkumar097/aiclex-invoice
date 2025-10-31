@@ -2,16 +2,18 @@
 # Crux Invoice Management System
 # Built by Aiclex Technologies
 #
-# Notes:
-# - Put images in assets/ as .jpg:
-#     assets/logo_top.jpg
-#     assets/company_text.jpg   # optional (not used in layout below but kept)
-#     assets/tagline.jpg
-#     assets/signature_stamp.jpg
-# - Appyflow GST API key should be stored in .streamlit/secrets.toml:
-#     [appyflow]
-#     key_secret = "YOUR_APPYFLOW_KEY_SECRET"
-# - This app DOES NOT collect client email when adding a client (per user's request).
+# Put images in assets/ as .jpg:
+#   assets/logo_top.jpg
+#   assets/company_text.jpg   # optional
+#   assets/tagline.jpg
+#   assets/signature_stamp.jpg
+#
+# Put Appyflow key in .streamlit/secrets.toml if using GST API:
+# [appyflow]
+# key_secret = "YOUR_APPYFLOW_KEY_SECRET"
+#
+# Install required packages:
+# pip install streamlit pandas reportlab num2words openpyxl requests
 
 import streamlit as st
 import sqlite3
@@ -22,8 +24,9 @@ import traceback
 import requests
 from num2words import num2words
 from decimal import Decimal, ROUND_HALF_UP
+from math import ceil
 
-# ReportLab imports
+# ReportLab
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import mm
@@ -209,17 +212,13 @@ class HR(Flowable):
         self.canv.setStrokeColor(self.color)
         self.canv.line(0,0,self.width,0)
 
-# ---------------- PDF generation (improved table + supporting sheet wrapping) ----------------
+# ---------------- PDF generation (improved supporting sheet splitting & wrapping) ----------------
 def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     """
-    Generates PDF with layout:
-    - Top: logo then tagline
-    - Centered "INVOICE"
-    - GST IN (left) and PAN NO (right)
-    - Big boxed area with Service Location (left) and Invoice + Vendor Bank (right)
-    - Items table (fixed widths, wrapped text, right-aligned numbers)
-    - Totals, amount in words, signature, footer
-    - Supporting Excel data as last page with wrapped cells & adaptive font size
+    Generates PDF with requested layout and improved supporting Excel rendering:
+    - Splits wide supporting DataFrame into column-chunks (default 10 cols per chunk)
+    - Each chunk rendered as its own table (stacked vertically). If page fills, continues to new page.
+    - Paragraph-wrapped cells, adaptive font-size, increased padding & leading for readability.
     """
     from decimal import Decimal, ROUND_HALF_UP
     from reportlab.lib.styles import ParagraphStyle
@@ -235,7 +234,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     page_width = A4[0] - (15*mm + 15*mm)
 
     # helper styles
-    cell_style = ParagraphStyle("cell", fontSize=9, leading=11)
+    body_style = ParagraphStyle("body", fontSize=9, leading=11)
     header_style = ParagraphStyle("hdr", fontSize=9, leading=11, alignment=1)
     desc_style = ParagraphStyle("desc", fontSize=9, leading=12)
     right_style = ParagraphStyle("right", fontSize=9, leading=11, alignment=2)
@@ -246,25 +245,25 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
             img.hAlign = align
             story.append(img)
 
-    # Top assets
+    # --- Header/logo/tagline ---
     safe_img(COMPANY.get('logo_top'), 87*mm, 25.2*mm, align='CENTER')
-    story.append(Spacer(1,4))
+    story.append(Spacer(1, 4))
     safe_img(COMPANY.get('tagline'), 164.8*mm, 5.4*mm, align='CENTER')
-    story.append(Spacer(1,8))
+    story.append(Spacer(1, 8))
 
     # Title
     story.append(Paragraph("INVOICE", styles['title_center']))
-    story.append(Spacer(1,6))
+    story.append(Spacer(1, 6))
 
-    # GST / PAN row
+    # GST / PAN
     gst_text = f"<b>GST IN :</b> {COMPANY.get('gstin','')}"
     pan_text = f"<b>PAN NO :</b> {COMPANY.get('pan','')}"
-    gst_pan = Table([[Paragraph(gst_text, cell_style), Paragraph(pan_text, right_style)]], colWidths=[page_width*0.6, page_width*0.4])
+    gst_pan = Table([[Paragraph(gst_text, body_style), Paragraph(pan_text, right_style)]], colWidths=[page_width*0.6, page_width*0.4])
     gst_pan.setStyle(TableStyle([('ALIGN',(1,0),(1,0),'RIGHT'), ('BOTTOMPADDING',(0,0),(-1,-1),6)]))
     story.append(gst_pan)
-    story.append(Spacer(1,8))
+    story.append(Spacer(1, 8))
 
-    # Big boxed area
+    # Big boxed area (Service Location left, Invoice+Bank right)
     client = invoice_meta.get('client', {}) or {}
     left_lines = ["<b>Service Location</b>", "<br/>"]
     if client.get('name'):
@@ -288,7 +287,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     ]
     right_html = right_top + "<br/><br/>" + "<br/>".join(vendor_lines)
 
-    boxes = Table([[Paragraph(left_html, cell_style), Paragraph(right_html, cell_style)]], colWidths=[page_width*0.55, page_width*0.45])
+    boxes = Table([[Paragraph(left_html, body_style), Paragraph(right_html, body_style)]], colWidths=[page_width*0.55, page_width*0.45])
     boxes.setStyle(TableStyle([
         ('BOX',(0,0),(-1,-1),0.5,colors.grey),
         ('INNERGRID',(0,0),(-1,-1),0.25,colors.grey),
@@ -297,21 +296,10 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
         ('RIGHTPADDING',(0,0),(-1,-1),6),
     ]))
     story.append(boxes)
-    story.append(Spacer(1,10))
+    story.append(Spacer(1, 10))
 
-    # Items table
-    # Column widths tuned to expected layout; adjust if needed
-    col_widths = [
-        12*mm,   # SL.NO
-        46*mm,   # PARTICULARS
-        70*mm,   # DESCRIPTION (reasonable default)
-        22*mm,   # SAC CODE
-        14*mm,   # QTY
-        22*mm,   # RATE
-        26*mm    # TAXABLE AMOUNT
-    ]
-
-    # If sum exceeds page width, scale down
+    # Items table (fixed widths + wrapped text)
+    col_widths = [12*mm, 46*mm, 70*mm, 22*mm, 14*mm, 22*mm, 26*mm]
     total_w = sum(col_widths)
     if total_w > page_width:
         scale = page_width / total_w
@@ -325,10 +313,10 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
         rate = Decimal(str(r.get('rate',0) or 0))
         amt = (qty * rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         row = [
-            Paragraph(str(r.get('slno','')), cell_style),
-            Paragraph(str(r.get('particulars','')), cell_style),
+            Paragraph(str(r.get('slno','')), body_style),
+            Paragraph(str(r.get('particulars','')), body_style),
             Paragraph(str(r.get('description','')), desc_style),
-            Paragraph(str(r.get('sac_code','')), cell_style),
+            Paragraph(str(r.get('sac_code','')), body_style),
             Paragraph(str(qty), right_style),
             Paragraph(f"{rate:,.2f}", right_style),
             Paragraph(f"{amt:,.2f}", right_style)
@@ -348,12 +336,12 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
         ('BOTTOMPADDING',(0,0),(-1,-1),4),
     ]))
     story.append(items_table)
-    story.append(Spacer(1,8))
+    story.append(Spacer(1, 8))
 
     # Totals
     subtotal = sum([Decimal(str(r.get('qty',0) or 0)) * Decimal(str(r.get('rate',0) or 0)) for r in line_items])
     subtotal = subtotal.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    adv = Decimal(str(invoice_meta.get('advance_received', 0) or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    advance = Decimal(str(invoice_meta.get('advance_received', 0) or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     comp_state = gst_state_code(COMPANY.get('gstin',''))
     cli_state = gst_state_code(client.get('gstin',''))
@@ -367,88 +355,106 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
         sgst = (subtotal * Decimal('0.09')).quantize(Decimal("0.01")); cgst = (subtotal * Decimal('0.09')).quantize(Decimal("0.01")); igst = Decimal('0')
 
     total = (subtotal + sgst + cgst + igst).quantize(Decimal("0.01"))
-    net = (total - adv).quantize(Decimal("0.01"))
+    net_payable = (total - advance).quantize(Decimal("0.01"))
 
-    totals = [
-        ["Sub Total", Paragraph(f"Rs. {subtotal:,.2f}", right_style)]
-    ]
+    totals_data = [["Sub Total", Paragraph(f"Rs. {subtotal:,.2f}", right_style)]]
     if use_igst:
-        totals.append(["IGST (18%)", Paragraph(f"Rs. {igst:,.2f}", right_style)])
+        totals_data.append(["IGST (18%)", Paragraph(f"Rs. {igst:,.2f}", right_style)])
     else:
-        totals.append(["SGST (9%)", Paragraph(f"Rs. {sgst:,.2f}", right_style)])
-        totals.append(["CGST (9%)", Paragraph(f"Rs. {cgst:,.2f}", right_style)])
-    if adv > 0:
-        totals.append(["Less Advance Received", Paragraph(f"Rs. {adv:,.2f}", right_style)])
-    totals.append(["TOTAL", Paragraph(f"Rs. {net:,.2f}", right_style)])
+        totals_data.append(["SGST (9%)", Paragraph(f"Rs. {sgst:,.2f}", right_style)])
+        totals_data.append(["CGST (9%)", Paragraph(f"Rs. {cgst:,.2f}", right_style)])
+    if advance > 0:
+        totals_data.append(["Less Advance Received", Paragraph(f"Rs. {advance:,.2f}", right_style)])
+    totals_data.append(["NET PAYABLE", Paragraph(f"Rs. {net_payable:,.2f}", right_style)])
 
-    tot_tbl = Table(totals, colWidths=[page_width*0.65, page_width*0.35], hAlign='RIGHT')
-    tot_tbl.setStyle(TableStyle([
+    totals_tbl = Table(totals_data, colWidths=[page_width*0.65, page_width*0.35], hAlign='RIGHT')
+    totals_tbl.setStyle(TableStyle([
         ('GRID',(0,0),(-1,-1),0.25,colors.grey),
         ('ALIGN',(1,0),(1,-1),'RIGHT'),
         ('BACKGROUND',(0,-1),(-1,-1),colors.whitesmoke),
     ]))
-    story.append(tot_tbl)
+    story.append(totals_tbl)
     story.append(Spacer(1,8))
 
-    # In words
-    story.append(Paragraph(f"In Words : ( {rupees_in_words(net)} )", cell_style))
+    story.append(Paragraph(f"In Words : ( {rupees_in_words(net_payable)} )", body_style))
     story.append(Spacer(1,12))
 
     # Signature
     if COMPANY.get('signature') and os.path.exists(COMPANY.get('signature')):
-        sig = Image(COMPANY['signature'], width=44.6*mm, height=31.3*mm)
-        sig.hAlign = 'LEFT'
-        story.append(KeepTogether([sig, Spacer(1,4), Paragraph("For Crux Management Services (P) Ltd<br/><br/>Authorised Signatory", styles['Normal'])]))
+        sig_img = Image(COMPANY['signature'], width=44.6*mm, height=31.3*mm)
+        sig_img.hAlign = 'LEFT'
+        story.append(KeepTogether([sig_img, Spacer(1,4), Paragraph("For Crux Management Services (P) Ltd<br/><br/>Authorised Signatory", styles['Normal'])]))
     else:
         story.append(Paragraph("For Crux Management Services (P) Ltd<br/><br/>Authorised Signatory", styles['Normal']))
 
     story.append(Spacer(1,10))
     story.append(HR(page_width, thickness=0.5, color=colors.grey))
-    footer = COMPANY['address'] + " | Phone: " + COMPANY['phone'] + " | Email: " + COMPANY['email'] + " | " + APP_BUILT_BY
-    story.append(Paragraph(footer, styles['footer']))
+    footer_text = COMPANY['address'] + " | Phone: " + COMPANY['phone'] + " | Email: " + COMPANY['email'] + " | " + APP_BUILT_BY
+    story.append(Paragraph(footer_text, styles['footer']))
 
-    # Supporting DataFrame: final page, wrapped cells, adaptive font-size
+    # Supporting DataFrame: improved splitting & wrapping
     if supporting_df is not None and not supporting_df.empty:
         try:
-            story.append(PageBreak())
-            story.append(Paragraph("Supporting Documents / Excel data", styles['Heading2']))
             df = supporting_df.fillna("").astype(str)
             n_cols = len(df.columns)
-            if n_cols <= 5:
-                font_size = 8
-            elif n_cols <= 8:
-                font_size = 7
-            else:
-                font_size = 6
-            sup_style = ParagraphStyle(name="sup_style", fontSize=font_size, leading=max(font_size+1,7))
-            min_col = 20*mm
-            default_col = page_width / n_cols
-            col_widths_sup = [max(default_col, min_col) for _ in df.columns]
-            totalw = sum(col_widths_sup)
-            if totalw > page_width:
-                scale = page_width / totalw
-                col_widths_sup = [w * scale for w in col_widths_sup]
-            table_data = []
-            header_row = [Paragraph(str(c), ParagraphStyle('hdr', fontSize=font_size, leading=font_size+1)) for c in df.columns]
-            table_data.append(header_row)
-            for _, row in df.iterrows():
-                row_cells = []
-                for col in df.columns:
-                    cell_text = " ".join(str(row[col]).split())
-                    row_cells.append(Paragraph(cell_text, sup_style))
-                table_data.append(row_cells)
-            sup_tbl = Table(table_data, colWidths=col_widths_sup, repeatRows=1)
-            sup_tbl.setStyle(TableStyle([
-                ('GRID',(0,0),(-1,-1),0.25,colors.grey),
-                ('BACKGROUND',(0,0),(-1,0),colors.whitesmoke),
-                ('VALIGN',(0,0),(-1,-1),'TOP'),
-                ('LEFTPADDING',(0,0),(-1,-1),4),
-                ('RIGHTPADDING',(0,0),(-1,-1),4),
-            ]))
-            story.append(sup_tbl)
-        except Exception as e:
-            story.append(Paragraph("Error adding supporting sheet: " + str(e), styles['wrap']))
+            max_cols_per_chunk = 10  # tweakable: smaller -> more vertical chunks
+            chunks = [df.columns[i:i+max_cols_per_chunk] for i in range(0, n_cols, max_cols_per_chunk)]
 
+            story.append(PageBreak())
+            story.append(Paragraph("Supporting Documents / Excel data", styles['Heading2']))
+            story.append(Spacer(1,6))
+
+            for idx_chunk, cols_chunk in enumerate(chunks):
+                cols_count = len(cols_chunk)
+                if cols_count <= 5:
+                    font_size = 8
+                elif cols_count <= 8:
+                    font_size = 7
+                else:
+                    font_size = 6
+
+                sup_style = ParagraphStyle(name=f"sup_{idx_chunk}", fontSize=font_size, leading=max(font_size+1,7))
+                hdr_style = ParagraphStyle(name=f"hdr_{idx_chunk}", fontSize=font_size, leading=max(font_size+1,7), alignment=1)
+
+                min_col_width = 18*mm
+                default_w = page_width / cols_count
+                col_widths = [max(default_w, min_col_width) for _ in cols_chunk]
+                totalw = sum(col_widths)
+                if totalw > page_width:
+                    scale = page_width / totalw
+                    col_widths = [w * scale for w in col_widths]
+
+                table_data = []
+                header_row = [Paragraph(str(c), hdr_style) for c in cols_chunk]
+                table_data.append(header_row)
+
+                for _, row in df.iterrows():
+                    row_cells = []
+                    for c in cols_chunk:
+                        text = " ".join(str(row[c]).split())
+                        row_cells.append(Paragraph(text, sup_style))
+                    table_data.append(row_cells)
+
+                sup_tbl = Table(table_data, colWidths=col_widths, repeatRows=1, hAlign='LEFT')
+                sup_tbl.setStyle(TableStyle([
+                    ('GRID',(0,0),(-1,-1),0.25,colors.grey),
+                    ('BACKGROUND',(0,0),(-1,0),colors.whitesmoke),
+                    ('VALIGN',(0,0),(-1,-1),'TOP'),
+                    ('LEFTPADDING',(0,0),(-1,-1),4),
+                    ('RIGHTPADDING',(0,0),(-1,-1),4),
+                    ('TOPPADDING',(0,0),(-1,-1),4),
+                    ('BOTTOMPADDING',(0,0),(-1,-1),4),
+                ]))
+
+                story.append(sup_tbl)
+                story.append(Spacer(1,8))
+                if idx_chunk != len(chunks)-1:
+                    story.append(Spacer(1,6))
+
+        except Exception as e:
+            story.append(Paragraph("Error rendering supporting sheet: " + str(e), styles['wrap']))
+
+    # build
     doc.build(story)
     return path
 
@@ -485,7 +491,6 @@ def main():
                             address = st.text_area("Address", value=res.get("address", ""))
                             gstin = st.text_input("GSTIN", value=res.get("gstin", gstin_input))
                             pan = st.text_input("PAN (auto)", value=res.get("pan", "") or "")
-                            # We do NOT ask client email per request
                             if st.button("Save Client (Using fetched data)"):
                                 if not name:
                                     st.error("Name required")

@@ -1,6 +1,7 @@
 # invoice_app.py
-# Crux Invoice Management System (updated: purchase order, state_code, calendar history, black-empty-cells)
-# Built by Aiclex Technologies
+# Crux Invoice Management System
+# Built for: Crux Management Services
+# Built by: Aiclex Technologies
 #
 # Requirements:
 # pip install streamlit pandas reportlab num2words openpyxl requests
@@ -22,13 +23,13 @@ from reportlab.lib import colors
 from reportlab.lib.units import mm
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
-    Image, PageBreak, Flowable
+    Image, PageBreak, Flowable, KeepTogether
 )
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
-# ---------------- App constants ----------------
+# ---------------- Constants & paths ----------------
 APP_TITLE = "Crux Invoice Management System"
 APP_BUILT_BY = "Built by Aiclex Technologies"
 DB_PATH = "invoices.db"
@@ -37,7 +38,6 @@ ASSETS_DIR = "assets"
 os.makedirs(PDF_DIR, exist_ok=True)
 os.makedirs(ASSETS_DIR, exist_ok=True)
 
-# ---------------- Company & asset paths ----------------
 COMPANY = {
     "name": "CRUX MANAGEMENT SERVICES (P) LTD",
     "gstin": "36AABCC4754D1ZX",
@@ -52,13 +52,13 @@ COMPANY = {
     "address": "#403, 4th Floor, Diamond Block, Lumbini Rockdale, Somajiguda, Hyderabad - 500082, Telangana",
     "email": "mailadmin@cruxmanagement.com",
     "logo_top": os.path.join(ASSETS_DIR, "logo_top.jpg"),
-    "company_text": os.path.join(ASSETS_DIR, "company_text.jpg"),
     "tagline": os.path.join(ASSETS_DIR, "tagline.jpg"),
-    "signature": os.path.join(ASSETS_DIR, "signature_stamp.jpg"),
+    "company_text": os.path.join(ASSETS_DIR, "company_text.jpg"),  # will be used as footer image if available
+    "signature": os.path.join(ASSETS_DIR, "signature_stamp.jpg"),  # signature + stamp
     "calibri_ttf": os.path.join(ASSETS_DIR, "Calibri.ttf")
 }
 
-# ---------------- Register Calibri (fallback if missing) ----------------
+# ---------------- Font registration (Calibri optional) ----------------
 FONT_NAME = "Helvetica"
 if os.path.exists(COMPANY["calibri_ttf"]):
     try:
@@ -66,8 +66,6 @@ if os.path.exists(COMPANY["calibri_ttf"]):
         FONT_NAME = "Calibri"
     except Exception:
         FONT_NAME = "Helvetica"
-else:
-    FONT_NAME = "Helvetica"
 
 # ---------------- Styles ----------------
 base_styles = getSampleStyleSheet()
@@ -107,19 +105,19 @@ def gst_state_code(gstin):
             return s[:2]
     except:
         pass
-    return None
+    return ""
 
-# quick mapping of some state codes to state abbreviations (extend as needed)
+# Basic state mapping for display (extend if needed)
 STATE_MAP = {
-    "09":"UP","10":"BR","07":"RJ","27":"MH","29":"KA","33":"OD","36":"TN","04":"RJ","35":"DL","19":"GJ","21":"LD"
-    # add more if you want to display full names
+    "01":"JK","02":"HP","03":"PB","04":"CH","05":"HR","06":"DL","07":"RJ","08":"UP","09":"UK","10":"BR","11":"Sikkim","12":"AR",
+    "13":"NL","14":"MN","15":"MZ","16":"TR","17":"ML","18":"AS","19":"WB","20":"JH","21":"OR","22":"CG","23":"MP","24":"GJ",
+    "25":"Dadra","26":"DD","27":"MH","28":"AP","29":"KA","30":"GA","31":"LD","32":"PY","33":"TN","34":"KL","35":"LA","36":"AN",
+    "37":"CHH","38":"UTT"  # sample - adjust labels you wish
 }
 
 def state_label_from_gst(gstin):
-    code = gst_state_code(gstin)
-    if code:
-        return STATE_MAP.get(code, code)
-    return ""
+    sc = gst_state_code(gstin)
+    return STATE_MAP.get(sc, sc) if sc else ""
 
 def safe_rerun():
     if hasattr(st, "experimental_rerun"):
@@ -136,13 +134,12 @@ def init_db():
         CREATE TABLE IF NOT EXISTS clients (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT,
-            gstin TEXT,
+            gstin TEXT UNIQUE,
             pan TEXT,
             address TEXT,
             email TEXT,
             purchase_order TEXT,
-            state_code TEXT,
-            UNIQUE(gstin)
+            state_code TEXT
         )
     """)
     cur.execute("""
@@ -162,11 +159,9 @@ def init_db():
     conn.commit()
     conn.close()
 
-# helper to add columns if older DB exists without new fields
 def migrate_db_add_columns():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    # check clients columns
     cur.execute("PRAGMA table_info(clients)")
     cols = [r[1] for r in cur.fetchall()]
     if "purchase_order" not in cols:
@@ -184,7 +179,7 @@ def migrate_db_add_columns():
 
 def get_clients():
     conn = sqlite3.connect(DB_PATH)
-    rows = conn.execute("SELECT id,name,gstin,address,email,purchase_order,state_code FROM clients ORDER BY name").fetchall()
+    rows = conn.execute("SELECT id,name,gstin,pan,address,email,purchase_order,state_code FROM clients ORDER BY name").fetchall()
     conn.close()
     return rows
 
@@ -197,7 +192,8 @@ def get_client_by_id(cid):
 def add_client(name, gstin, pan, address, email="", purchase_order="", state_code=""):
     conn = sqlite3.connect(DB_PATH)
     try:
-        conn.execute("INSERT OR REPLACE INTO clients (name,gstin,pan,address,email,purchase_order,state_code) VALUES (?,?,?,?,?,?,?)", (name,gstin,pan,address,email,purchase_order,state_code))
+        conn.execute("INSERT OR REPLACE INTO clients (name,gstin,pan,address,email,purchase_order,state_code) VALUES (?,?,?,?,?,?,?)",
+                     (name,gstin,pan,address,email,purchase_order,state_code))
         conn.commit()
         return True, None
     except Exception as e:
@@ -207,7 +203,8 @@ def add_client(name, gstin, pan, address, email="", purchase_order="", state_cod
 
 def update_client(cid, name, gstin, pan, address, email="", purchase_order="", state_code=""):
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("UPDATE clients SET name=?,gstin=?,pan=?,address=?,email=?,purchase_order=?,state_code=? WHERE id=?", (name,gstin,pan,address,email,purchase_order,state_code,cid))
+    conn.execute("UPDATE clients SET name=?,gstin=?,pan=?,address=?,email=?,purchase_order=?,state_code=? WHERE id=?",
+                 (name,gstin,pan,address,email,purchase_order,state_code,cid))
     conn.commit()
     conn.close()
 
@@ -217,37 +214,34 @@ def delete_client(cid):
     conn.commit()
     conn.close()
 
-# ---------------- GST API (Appyflow) ----------------
-def fetch_gst_from_appyflow(gstin, timeout=10):
+# ---------------- GST API (appyflow) ----------------
+def fetch_gst_from_appyflow(gstin, timeout=8):
     gstin = str(gstin).strip()
     if not gstin:
         return {"ok": False, "error": "Empty GSTIN"}
-
-    key_secret = None
+    key = None
     try:
-        key_secret = st.secrets["appyflow"]["key_secret"]
+        key = st.secrets["appyflow"]["key_secret"]
     except Exception:
-        key_secret = os.getenv("APPYFLOW_KEY_SECRET")
-
-    if not key_secret:
-        return {"ok": False, "error": "API key missing in secrets."}
-
+        key = os.getenv("APPYFLOW_KEY_SECRET")
+    if not key:
+        return {"ok": False, "error": "API key missing in secrets or env var."}
     url = "https://appyflow.in/api/verifyGST"
-    params = {"key_secret": key_secret, "gstNo": gstin}
+    params = {"key_secret": key, "gstNo": gstin}
     try:
         r = requests.get(url, params=params, timeout=timeout)
         r.raise_for_status()
         j = r.json()
     except Exception as e:
         return {"ok": False, "error": f"Request failed: {e}"}
-
     if isinstance(j, dict) and ("taxpayerInfo" in j or j.get("error") is False or j.get("status") == "success"):
         info = j.get("taxpayerInfo") or j.get("taxpayerinfo") or j.get("taxpayer") or j
         name = info.get("tradeNam") or info.get("lgnm") or info.get("tradeName") or info.get("name") or ""
+        # parse address
         addr = ""
         try:
-            pradr = info.get("pradr", {}) or {}
-            a = pradr.get("addr", {}) or {}
+            pradr = info.get("pradr",{}) or {}
+            a = pradr.get("addr",{}) or {}
             parts = []
             for k in ("bno","st","loc","city","dst","pncd","stcd","bn","addr1","addr2","state"):
                 v = a.get(k) or a.get(k.upper()) or a.get(k.lower())
@@ -257,20 +251,18 @@ def fetch_gst_from_appyflow(gstin, timeout=10):
         except:
             addr = ""
         pan = None
-        for pk in ("pan", "panno", "panNo", "PAN"):
+        for pk in ("pan","panno","panNo","PAN"):
             if info.get(pk):
-                pan = str(info.get(pk)).strip()
-                break
+                pan = str(info.get(pk)).strip(); break
         if not pan and len(gstin) >= 12:
             pan = gstin[2:12].upper()
-        gstout = info.get("gstin") or gstin
-        state_code = gst_state_code(gstin) or ""
-        return {"ok": True, "name": name, "address": addr, "gstin": gstout, "pan": pan, "state_code": state_code, "raw": j}
+        state_code = gst_state_code(gstin)
+        return {"ok": True, "name": name, "address": addr, "gstin": gstin, "pan": pan, "state_code": state_code, "raw": j}
     else:
         msg = j.get("message") if isinstance(j, dict) else str(j)
         return {"ok": False, "error": msg or "API returned error"}
 
-# ---------------- HR Flowable ----------------
+# ---------------- Flowable HR ----------------
 class HR(Flowable):
     def __init__(self, width, thickness=1, color=colors.black):
         Flowable.__init__(self)
@@ -282,39 +274,47 @@ class HR(Flowable):
 
 # ---------------- PDF generation ----------------
 def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
-    """
-    - Header: INVOICE above, gst & pan in one row
-    - Items table: header font 11, body font 9
-    - Empty or zero qty/rate/taxable cells => black background + white text
-    - Purchase Order shows under client's GST in the client box (if provided)
-    """
     from decimal import Decimal, ROUND_HALF_UP
     def q(v):
         return Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-    # prepare filtered items (only include rows user provided or keep placeholders)
-    filtered_items = []
-    for r in line_items:
+    # prepare items (preserve None blanks)
+    prepared = []
+    for idx, r in enumerate(line_items, start=1):
         partic = str(r.get('particulars') or "").strip()
+        desc = str(r.get('description') or "")
+        sac = str(r.get('sac_code') or "")
+        qty_raw = r.get('qty')  # can be None or string/number
+        rate_raw = r.get('rate')
+        # interpret blank strings as None
+        qty_val = None
+        rate_val = None
         try:
-            qty = float(r.get('qty') or 0)
+            if qty_raw is None or str(qty_raw).strip() == "":
+                qty_val = None
+            else:
+                qty_val = float(str(qty_raw).replace(",", "").strip())
         except:
-            qty = 0.0
+            qty_val = None
         try:
-            rate = float(r.get('rate') or 0)
+            if rate_raw is None or str(rate_raw).strip() == "":
+                rate_val = None
+            else:
+                rate_val = float(str(rate_raw).replace(",", "").strip())
         except:
-            rate = 0.0
-        taxable = q(qty * rate)
-        filtered_items.append({
-            "slno": r.get('slno') or "",
+            rate_val = None
+        taxable_num = q(qty_val * rate_val) if (qty_val is not None and rate_val is not None) else Decimal("0.00")
+        prepared.append({
+            "slno": r.get('slno') or idx,
             "particulars": partic,
-            "description": str(r.get('description') or ""),
-            "sac_code": str(r.get('sac_code') or ""),
-            "qty": qty,
-            "rate": q(rate),
-            "taxable_amount": taxable
+            "description": desc,
+            "sac_code": sac,
+            "qty": qty_val,
+            "rate": q(rate_val) if rate_val is not None else None,
+            "taxable_amount": taxable_num
         })
 
+    # create pdf
     filename = f"Invoice_{invoice_meta.get('invoice_no','NA')}_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
     path = os.path.join(PDF_DIR, filename)
     doc = SimpleDocTemplate(path, pagesize=A4, leftMargin=12*mm, rightMargin=12*mm, topMargin=12*mm, bottomMargin=12*mm)
@@ -334,37 +334,34 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
             except Exception:
                 pass
 
-    # Header images
-    add_image_if(COMPANY.get('logo_top'), w_mm=87, h_mm=25.2, align='CENTER', spacer_after=2)
-    add_image_if(COMPANY.get('tagline'), w_mm=164.8, h_mm=5.4, align='CENTER', spacer_after=6)
-
-    # Title INVOICE
+    # Header: INVOICE center row
     story.append(Paragraph("INVOICE", TITLE_STYLE))
     story.append(Spacer(1,6))
 
-    # GST / PAN in same row
+    # GST / PAN row below INVOICE
     gst_html = f"<b>GST IN :</b> {COMPANY.get('gstin','')}"
     pan_html = f"<b>PAN NO :</b> {COMPANY.get('pan','')}"
     gst_pan_tbl = Table([[Paragraph(gst_html, BODY_STYLE), Paragraph(pan_html, RIGHT_STYLE)]], colWidths=[page_width*0.6, page_width*0.4])
     gst_pan_tbl.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'), ('BOTTOMPADDING',(0,0),(-1,-1),6)]))
     story.append(gst_pan_tbl)
-    story.append(Spacer(1,6))
+    story.append(Spacer(1,8))
 
-    # Client & Invoice boxes
+    # Optional logo & tagline below (if you want them under header; commented if not needed)
+    add_image_if(COMPANY.get('logo_top'), w_mm=87, h_mm=25.2, align='CENTER', spacer_after=4)
+    add_image_if(COMPANY.get('tagline'), w_mm=164.8, h_mm=5.4, align='CENTER', spacer_after=6)
+
+    # Client left box & invoice right box
     client = invoice_meta.get('client', {}) or {}
     left_lines = ["<b>Service Location</b>"]
     if client.get('name'):
         left_lines.append(f"To M/s: {client.get('name')}")
     if client.get('address'):
-        left_lines.append(str(client.get('address')).replace("\n","<br/>"))
+        left_lines.append(str(client.get('address')).replace("\n", "<br/>"))
     left_lines.append("<br/>")
     if client.get('gstin'):
         left_lines.append(f"<b>GSTIN NO:</b> {client.get('gstin')}")
-    # Purchase Order row under GST (optional)
-    po = client.get('purchase_order','')
-    if po:
-        left_lines.append(f"<b>Purchase Order:</b> {po}")
-
+    if client.get('purchase_order'):
+        left_lines.append(f"<b>Purchase Order:</b> {client.get('purchase_order')}")
     left_html = "<br/>".join(left_lines)
 
     inv_no = invoice_meta.get('invoice_no','')
@@ -396,54 +393,44 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     story.append(big_box)
     story.append(Spacer(1,8))
 
-    # Items table
+    # Items table - header size 11, body 9
     headers = ["SL.NO","PARTICULARS","DESCRIPTION of SAC CODE","SAC CODE","QTY","RATE","TAXABLE AMOUNT"]
+    # choose column widths
     col_w = [12*mm, 45*mm, (page_width - (12*mm + 45*mm + 22*mm + 14*mm + 22*mm + 26*mm)), 22*mm, 14*mm, 22*mm, 26*mm]
-    for i in range(len(col_w)):
-        if col_w[i] < 10*mm:
-            col_w[i] = 10*mm
     total_w = sum(col_w)
     if total_w > page_width:
         scale = page_width / total_w
         col_w = [w*scale for w in col_w]
 
     table_data = [[Paragraph(h, HEADER_STYLE) for h in headers]]
-    # add rows; also track which cells should be black
-    black_cells = []  # list of (col_idx,row_idx)
-    for ridx, r in enumerate(filtered_items, start=1):
-        # build cell values as text
-        sl = str(r.get('slno','') or "")
-        part = r.get('particulars','') or ""
-        desc = r.get('description','') or ""
-        sac = r.get('sac_code','') or ""
-        qty = "" if (r.get('qty') == 0 or r.get('qty') is None) else str(int(r.get('qty')))
-        rate = "" if (r.get('rate') == 0 or r.get('rate') is None) else f"{r.get('rate'):,}"
-        tax = "" if (r.get('taxable_amount') == 0 or r.get('taxable_amount') is None) else f"{r.get('taxable_amount'):,}"
-
+    black_cells = []
+    for r_idx, r in enumerate(prepared, start=1):
+        sl = str(r['slno'])
+        part = r['particulars']
+        desc = r['description']
+        sac = r['sac_code']
+        qty_display = "" if r['qty'] is None else (str(int(r['qty'])) if float(r['qty']).is_integer() else str(r['qty']))
+        rate_display = "" if r['rate'] is None else f"{r['rate']:,.2f}"
+        tax_display = "" if (r['qty'] is None or r['rate'] is None) else f"{r['taxable_amount']:,.2f}"
         row = [
             Paragraph(sl, BODY_STYLE),
             Paragraph(part, BODY_STYLE),
             Paragraph(desc, DESC_STYLE),
             Paragraph(sac, BODY_STYLE),
-            Paragraph(qty, RIGHT_STYLE),
-            Paragraph(rate, RIGHT_STYLE),
-            Paragraph(tax, RIGHT_STYLE)
+            Paragraph(qty_display, RIGHT_STYLE),
+            Paragraph(rate_display, RIGHT_STYLE),
+            Paragraph(tax_display, RIGHT_STYLE)
         ]
         table_data.append(row)
-        # mark black for empty/zero cells (we want them black)
-        vals = [sl, part, desc, sac, qty, rate, tax]
-        for cidx, val in enumerate(vals):
-            if cidx in (4,5,6):  # qty, rate, taxable columns only as per request
-                if val == "" or val == "0" or val == "0.00":
-                    # ReportLab table uses (col, row) where row includes header row at index 0
-                    black_cells.append((cidx, ridx))
+        # mark qty/rate/tax cells black if blank or zero
+        for c_offset, val in enumerate([qty_display, rate_display, tax_display], start=4):
+            if val == "" or val == "0" or val == "0.00":
+                black_cells.append((c_offset, r_idx))
 
-    # ensure at least one data row
     if len(table_data) == 1:
         table_data.append([Paragraph("-", BODY_STYLE)] + [Paragraph("-", BODY_STYLE)]*(len(headers)-1))
 
     items_tbl = Table(table_data, colWidths=col_w, repeatRows=1)
-    # base style
     tbl_style = [
         ('GRID',(0,0),(-1,-1),0.35,colors.black),
         ('BACKGROUND',(0,0),(-1,0),colors.whitesmoke),
@@ -453,9 +440,9 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
         ('LEFTPADDING',(0,0),(-1,-1),6),
         ('RIGHTPADDING',(0,0),(-1,-1),6),
         ('TOPPADDING',(0,0),(-1,-1),6),
-        ('BOTTOMPADDING',(0,0),(-1,-1),6),
+        ('BOTTOMPADDING',(0,0),(-1,-1),6)
     ]
-    # add background for black cells and white text
+    # apply black backgrounds to specific cells
     for (cidx, ridx) in black_cells:
         tbl_style.append(('BACKGROUND',(cidx,ridx),(cidx,ridx),colors.black))
         tbl_style.append(('TEXTCOLOR',(cidx,ridx),(cidx,ridx),colors.white))
@@ -464,11 +451,11 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     story.append(items_tbl)
     story.append(Spacer(1,8))
 
-    # Totals
-    subtotal = q(sum([r['taxable_amount'] for r in filtered_items])) if filtered_items else q(0)
-    adv = q(invoice_meta.get('advance_received', 0) or 0)
-    comp_state = gst_state_code(COMPANY.get('gstin','') or "")
-    cli_state = gst_state_code(client.get('gstin','') or "")
+    # Totals calculation
+    subtotal = sum([r['taxable_amount'] for r in prepared]) if prepared else Decimal("0.00")
+    adv = Decimal(str(invoice_meta.get('advance_received', 0) or 0)).quantize(Decimal("0.01"))
+    comp_state = gst_state_code(COMPANY.get('gstin',''))
+    cli_state = gst_state_code(client.get('gstin','')) if client.get('gstin') else ""
     use_igst = invoice_meta.get('use_igst', False)
     if comp_state and cli_state and comp_state != cli_state:
         use_igst = True
@@ -493,7 +480,9 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
         totals_rows.append([Paragraph("CGST (9%)", TOTAL_LABEL_STYLE), Paragraph(f"Rs. {cgst:,.2f}", TOTAL_VALUE_STYLE)])
     if adv > 0:
         totals_rows.append([Paragraph("Less Advance Received", TOTAL_LABEL_STYLE), Paragraph(f"Rs. {adv:,.2f}", TOTAL_VALUE_STYLE)])
-    totals_rows.append([Paragraph("<b>TOTAL</b>", ParagraphStyle("tot_bold_label", fontName=FONT_NAME, fontSize=11, leading=13)), Paragraph(f"<b>Rs. {net:,.2f}</b>", ParagraphStyle("tot_bold_val", fontName=FONT_NAME, fontSize=11, leading=13, alignment=2))])
+    totals_rows.append([Paragraph("<b>TOTAL</b>", ParagraphStyle("tot_bold_label", fontName=FONT_NAME, fontSize=11, leading=13)),
+                        Paragraph(f"<b>Rs. {net:,.2f}</b>", ParagraphStyle("tot_bold_val", fontName=FONT_NAME, fontSize=11, leading=13, alignment=2))])
+
     tot_tbl = Table(totals_rows, colWidths=[page_width*0.65, page_width*0.35], hAlign='RIGHT')
     tot_tbl.setStyle(TableStyle([
         ('INNERGRID',(0,0),(-1,-2),0.25,colors.lightgrey),
@@ -501,7 +490,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
         ('BACKGROUND', (0,-1), (-1,-1), colors.lightgrey),
         ('ALIGN',(1,0),(1,-1),'RIGHT'),
         ('LEFTPADDING',(0,0),(-1,-1),6),
-        ('RIGHTPADDING',(0,0),(-1,-1),6),
+        ('RIGHTPADDING',(0,0),(-1,-1),6)
     ]))
     story.append(tot_tbl)
     story.append(Spacer(1,8))
@@ -509,7 +498,7 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     story.append(Paragraph(f"In Words : ( {rupees_in_words(net)} )", BODY_STYLE))
     story.append(Spacer(1,10))
 
-    # Signature + footer image (company_text)
+    # Signature / authorised
     if COMPANY.get('signature') and os.path.exists(COMPANY.get('signature')):
         try:
             sig = Image(COMPANY['signature'], width=44.6*mm, height=31.3*mm)
@@ -518,20 +507,22 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
             story.append(Spacer(1,4))
         except Exception:
             pass
-    story.append(Paragraph("For " + COMPANY.get('name', ''), BODY_STYLE))
+    story.append(Paragraph("For " + COMPANY.get('name',''), BODY_STYLE))
     story.append(Paragraph("Authorised Signatory", BODY_STYLE))
     story.append(Spacer(1,10))
 
+    # Footer image (company text) if provided
     if COMPANY.get('company_text') and os.path.exists(COMPANY.get('company_text')):
         add_image_if(COMPANY.get('company_text'), w_mm=177, h_mm=27.2, align='CENTER', spacer_after=4)
 
-    # Supporting dataframe page(s)
+    # Supporting documents page(s) + stamp at bottom-right of last supporting page
     if supporting_df is not None and not supporting_df.empty:
         try:
             df = supporting_df.fillna("").astype(str)
             story.append(PageBreak())
             story.append(Paragraph("Supporting Documents / Excel data", TITLE_STYLE))
             story.append(Spacer(1,6))
+
             cols = list(df.columns)
             max_cols = 10
             for start in range(0, len(cols), max_cols):
@@ -556,19 +547,30 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
                 ]))
                 story.append(sup_tbl)
                 story.append(Spacer(1,8))
+
+            # stamp on last supporting page bottom-right
+            if COMPANY.get('signature') and os.path.exists(COMPANY.get('signature')):
+                try:
+                    stamp = Image(COMPANY['signature'], width=44.6*mm, height=31.3*mm)
+                    stamp.hAlign = 'RIGHT'
+                    story.append(Spacer(1,8))
+                    story.append(stamp)
+                except Exception:
+                    pass
+
         except Exception as e:
             story.append(Paragraph("Error rendering supporting sheet: " + str(e), BODY_STYLE))
 
     doc.build(story)
     return path
 
-# ---------------- Bulk helpers (same as earlier but include state_code) ----------------
+# ---------------- Bulk helpers ----------------
 def normalize_uploaded_df(df):
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
     lower = {c.lower(): c for c in df.columns}
     mapping = {}
-    for expected in ("gstin","gst","gst_no","gst_no.","gst_no","gst number"):
+    for expected in ("gstin","gst","gst_no","gst_no.","gst number"):
         if expected in lower:
             mapping['gstin'] = lower[expected]; break
     for expected in ("name","company","company_name","business_name","trade_name"):
@@ -581,73 +583,54 @@ def normalize_uploaded_df(df):
         if expected in lower:
             mapping['pan'] = lower[expected]; break
     if 'gstin' not in mapping:
-        mapping['gstin'] = df.columns[0] if len(df.columns) > 0 else None
-    out_rows = []
+        mapping['gstin'] = df.columns[0] if len(df.columns)>0 else None
+    rows = []
     for _, row in df.iterrows():
         gstin_val = row.get(mapping.get('gstin')) if mapping.get('gstin') else ''
         name_val = row.get(mapping.get('name')) if mapping.get('name') else ''
-        address_val = row.get(mapping.get('address')) if mapping.get('address') else ''
+        addr_val = row.get(mapping.get('address')) if mapping.get('address') else ''
         pan_val = row.get(mapping.get('pan')) if mapping.get('pan') else ''
-        out_rows.append({
+        rows.append({
             "gstin": str(gstin_val).strip(),
             "name": str(name_val).strip(),
-            "address": str(address_val).strip(),
+            "address": str(addr_val).strip(),
             "pan": str(pan_val).strip()
         })
-    return pd.DataFrame(out_rows)
+    return pd.DataFrame(rows)
 
 def bulk_verify_and_prepare(df, verify_with_api=True, delay_between_calls=0.2, show_progress=True):
     results = []
     total = len(df)
     progress = None
-    if show_progress and total > 0:
+    if show_progress and total>0:
         progress = st.progress(0)
     for i, row in df.iterrows():
         gstin = str(row.get('gstin','')).strip()
-        given_name = row.get('name','') or ""
-        given_addr = row.get('address','') or ""
-        given_pan = row.get('pan','') or ""
-        res_name = ""
-        res_addr = ""
-        res_pan = ""
+        name = row.get('name','') or ""
+        address = row.get('address','') or ""
+        pan = row.get('pan','') or ""
         status = "Manual"
         error = ""
+        state = ""
         if not gstin:
-            status = "Failed"
-            error = "Empty GSTIN"
+            status = "Failed"; error = "Empty GSTIN"
         else:
             if verify_with_api:
                 api_res = fetch_gst_from_appyflow(gstin)
                 if api_res.get("ok"):
-                    res_name = api_res.get("name","") or given_name
-                    res_addr = api_res.get("address","") or given_addr
-                    res_pan = api_res.get("pan","") or given_pan
-                    res_state = api_res.get("state_code") or gst_state_code(gstin) or ""
+                    name = api_res.get("name") or name
+                    address = api_res.get("address") or address
+                    pan = api_res.get("pan") or pan
+                    state = api_res.get("state_code") or gst_state_code(gstin)
                     status = "OK"
                 else:
-                    res_name = given_name
-                    res_addr = given_addr
-                    res_pan = given_pan
-                    res_state = gst_state_code(gstin) or ""
-                    status = "Failed"
-                    error = api_res.get("error","API failed")
+                    status = "Failed"; error = api_res.get("error","API failed")
             else:
-                res_name = given_name
-                res_addr = given_addr
-                res_pan = given_pan if given_pan else (gstin[2:12].upper() if len(gstin)>=12 else "")
-                res_state = gst_state_code(gstin) or ""
-                status = "OK" if res_name or res_addr else "Manual"
-        results.append({
-            "gstin": gstin,
-            "name": res_name,
-            "address": res_addr,
-            "pan": res_pan,
-            "state": res_state,
-            "status": status,
-            "error": error
-        })
+                state = gst_state_code(gstin)
+                status = "OK"
+        results.append({"gstin": gstin, "name": name, "address": address, "pan": pan, "state": state, "status": status, "error": error})
         if show_progress:
-            progress.progress(int((i+1)/total * 100))
+            progress.progress(int((i+1)/total*100))
         if verify_with_api:
             time.sleep(delay_between_calls)
     if show_progress:
@@ -655,32 +638,25 @@ def bulk_verify_and_prepare(df, verify_with_api=True, delay_between_calls=0.2, s
     return pd.DataFrame(results)
 
 def add_successful_results_to_db(results_df, only_status="OK"):
-    added = 0
-    failed = []
-    for _, row in results_df.iterrows():
-        if row.get('status') == only_status:
-            ok, err = add_client(row.get('name') or "", row.get('gstin') or "", row.get('pan') or "", row.get('address') or "", email="", purchase_order="", state_code=row.get('state') or "")
-            if ok:
-                added += 1
-            else:
-                failed.append({"gstin": row.get('gstin'), "error": err})
+    added = 0; failed = []
+    for _, r in results_df.iterrows():
+        if r.get('status') == only_status:
+            ok, err = add_client(r.get('name') or "", r.get('gstin') or "", r.get('pan') or "", r.get('address') or "", email="", purchase_order="", state_code=r.get('state') or "")
+            if ok: added += 1
+            else: failed.append({"gstin": r.get('gstin'), "error": err})
     return added, failed
 
-# ---------------- Authentication UI ----------------
+# ---------------- Auth ----------------
 def check_password():
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
-
-    if st.session_state.get("authenticated"):
+    if st.session_state.authenticated:
         val = st.sidebar.select_slider("Session", options=["Stay Logged In", "Logout"], value="Stay Logged In")
         if val == "Logout":
             st.session_state.authenticated = False
             safe_rerun()
-        cols = st.columns([1,2,1])
-        with cols[1]:
-            st.markdown("**Logged in**")
+        st.sidebar.markdown("**Logged in**")
         return True
-
     st.write("**Enter password to continue**")
     pwd = st.text_input("Password", type="password")
     if st.button("Login"):
@@ -690,7 +666,7 @@ def check_password():
         except Exception:
             password = os.getenv("APP_PASSWORD")
         if password is None:
-            st.warning("No app password set in Streamlit secrets or APP_PASSWORD environment variable.")
+            st.warning("No app password set in Streamlit secrets or environment variable.")
             return False
         if pwd == password:
             st.session_state.authenticated = True
@@ -710,7 +686,6 @@ def main():
     init_db()
     migrate_db_add_columns()
 
-    # Authentication gate
     if not check_password():
         return
 
@@ -721,10 +696,9 @@ def main():
         st.header("Manage Clients")
         clients = get_clients()
         if clients:
-            dfc = pd.DataFrame(clients, columns=['id','name','gstin','address','email','purchase_order','state_code'])
+            dfc = pd.DataFrame(clients, columns=['id','name','gstin','pan','address','email','purchase_order','state_code'])
             st.dataframe(dfc[['name','gstin','state_code','purchase_order']])
 
-        # Add client (form)
         st.subheader("Add New Client")
         with st.form("add_client_form"):
             gstin_input = st.text_input("GSTIN", value="", max_chars=15)
@@ -735,7 +709,7 @@ def main():
             submitted = st.form_submit_button("Save Client")
             if submitted:
                 if not name:
-                    st.error("Name is required")
+                    st.error("Name required")
                 else:
                     st_code = gst_state_code(gstin_input) or ""
                     ok, err = add_client(name, gstin_input, pan, address, email="", purchase_order=purchase_order, state_code=st_code)
@@ -743,16 +717,15 @@ def main():
                         st.success("Client saved")
                         safe_rerun()
                     else:
-                        st.error(f"Could not save client: {err}")
+                        st.error(f"Save error: {err}")
 
-        # Fetch from GST API (single-step)
-        st.subheader("Fetch GST Details (one-by-one)")
-        gst_fetch = st.text_input("GSTIN to fetch (for auto-fill)", value="", key="gst_fetch_input")
+        st.subheader("Fetch GST (API)")
+        gst_fetch = st.text_input("GSTIN to fetch (for autofill)", value="", key="gst_fetch_input")
         if st.button("Fetch GST Details"):
             if not gst_fetch.strip():
-                st.error("Enter GSTIN first")
+                st.error("Enter GSTIN")
             else:
-                with st.spinner("Fetching from GST API..."):
+                with st.spinner("Fetching..."):
                     res = fetch_gst_from_appyflow(gst_fetch)
                 st.session_state._last_gst_fetch = res
         last = st.session_state.get("_last_gst_fetch")
@@ -760,7 +733,7 @@ def main():
             if last.get("ok"):
                 st.success("Fetched — verify and Save")
                 name_f = st.text_input("Company Name (fetched)", value=last.get("name",""), key="fetched_name")
-                address_f = st.text_area("Address (fetched)", value=last.get("address",""), key="fetched_addr")
+                addr_f = st.text_area("Address (fetched)", value=last.get("address",""), key="fetched_addr")
                 gstin_f = st.text_input("GSTIN (fetched)", value=last.get("gstin",""), key="fetched_gstin")
                 pan_f = st.text_input("PAN (fetched)", value=last.get("pan",""), key="fetched_pan")
                 po_f = st.text_input("Purchase Order (optional)", value="", key="fetched_po")
@@ -768,10 +741,10 @@ def main():
                     if not name_f:
                         st.error("Name required")
                     else:
-                        st_code = last.get("state_code") or gst_state_code(gstin_f) or ""
-                        ok, err = add_client(name_f, gstin_f, pan_f, address_f, email="", purchase_order=po_f, state_code=st_code)
+                        st_code = last.get("state_code") or gst_state_code(gstin_f)
+                        ok, err = add_client(name_f, gstin_f, pan_f, addr_f, email="", purchase_order=po_f, state_code=st_code)
                         if ok:
-                            st.success("Client saved (from API)")
+                            st.success("Saved")
                             st.session_state._last_gst_fetch = None
                             safe_rerun()
                         else:
@@ -780,98 +753,63 @@ def main():
                 st.error(f"Fetch error: {last.get('error')}")
                 st.session_state._last_gst_fetch = None
 
-        # Bulk Upload
-        st.subheader("Bulk Upload Clients (CSV / XLSX)")
-        st.markdown("Upload a file with columns: `gstin`, `name` (optional), `address` (optional), `pan` (optional).")
-        uploaded = st.file_uploader("Upload clients file", type=["csv","xlsx"])
+        # Bulk upload
+        st.subheader("Bulk Upload Clients (CSV/XLSX)")
+        uploaded = st.file_uploader("Upload file", type=["csv","xlsx"])
         if uploaded:
             try:
                 if uploaded.name.lower().endswith(".csv"):
                     df_raw = pd.read_csv(uploaded, dtype=str, keep_default_na=False)
                 else:
                     df_raw = pd.read_excel(uploaded, dtype=str)
-                st.success(f"File loaded: {uploaded.name} (rows: {len(df_raw)})")
-                st.dataframe(df_raw.head(10))
-                df_norm = normalize_uploaded_df(df_raw)
-                st.session_state._bulk_df = df_norm
+                st.success(f"Loaded {uploaded.name} rows:{len(df_raw)}")
+                st.dataframe(df_raw.head())
+                st.session_state._bulk_df = normalize_uploaded_df(df_raw)
             except Exception as e:
                 st.error(f"Error reading file: {e}")
                 st.session_state._bulk_df = None
 
         bulk_df = st.session_state.get("_bulk_df")
         if bulk_df is not None:
-            st.markdown("**Preview (normalized)**")
+            st.markdown("**Preview normalized**")
             st.dataframe(bulk_df.head(20))
-
             col1, col2 = st.columns(2)
             with col1:
-                verify_api = st.checkbox("Verify each GST using GST API (appyflow)", value=True)
+                verify_api = st.checkbox("Verify GST via API (appyflow)", value=True)
             with col2:
-                crux_mode = st.checkbox("Crux Team Mode (auto-add verified to DB)", value=False)
-
-            if st.button("Process & Verify (bulk)"):
+                auto_add = st.checkbox("Auto-add verified to DB", value=False)
+            if st.button("Process & Verify"):
                 if verify_api:
                     key_present = False
                     try:
                         if st.secrets and st.secrets.get("appyflow") and st.secrets["appyflow"].get("key_secret"):
                             key_present = True
-                    except Exception:
+                    except:
                         key_present = os.getenv("APPYFLOW_KEY_SECRET") is not None
                     if not key_present:
-                        st.warning("GST API key missing in secrets. Verification will fail. You can uncheck verification to just import given data.")
-                st.info("Starting verification... This will run sequentially and show progress.")
+                        st.warning("API key missing; uncheck verification to just import.")
                 with st.spinner("Verifying..."):
-                    results_df = bulk_verify_and_prepare(bulk_df, verify_with_api=verify_api, delay_between_calls=0.2, show_progress=True)
-                st.session_state._bulk_results = results_df
-                st.success("Verification completed. See results below.")
+                    results = bulk_verify_and_prepare(bulk_df, verify_with_api=verify_api, delay_between_calls=0.2, show_progress=True)
+                st.session_state._bulk_results = results
+                st.success("Done")
+        results = st.session_state.get("_bulk_results")
+        if results is not None:
+            st.dataframe(results)
+            if st.button("Add OK to DB"):
+                added, failed = add_successful_results_to_db(results, only_status="OK")
+                st.success(f"Added {added}; failed {len(failed)}")
+                safe_rerun()
+            if st.button("Clear Bulk"):
+                st.session_state._bulk_df = None; st.session_state._bulk_results = None
+                safe_rerun()
 
-            results = st.session_state.get("_bulk_results")
-            if results is not None:
-                st.markdown("**Verification Results**")
-                csv_bytes = results.to_csv(index=False).encode('utf-8')
-                st.download_button("Download results CSV", data=csv_bytes, file_name=f"bulk_results_{datetime.now().strftime('%Y%m%d%H%M%S')}.csv", mime="text/csv")
-                st.dataframe(results)
-
-                colA, colB, colC = st.columns(3)
-                with colA:
-                    if st.button("Add All OK to DB"):
-                        added, failed = add_successful_results_to_db(results, only_status="OK")
-                        msg = f"Added {added} clients."
-                        if failed:
-                            msg += f" {len(failed)} failed to add."
-                        st.success(msg)
-                        safe_rerun()
-                with colB:
-                    st.write("Add selected rows:")
-                    sel_idx = st.multiselect("Select row indices to add (0-based)", options=list(results.index))
-                    if st.button("Add selected rows"):
-                        chosen = results.loc[sel_idx]
-                        added_count = 0
-                        failed_list = []
-                        for _, r in chosen.iterrows():
-                            ok, err = add_client(r.get('name') or "", r.get('gstin') or "", r.get('pan') or "", r.get('address') or "", email="", purchase_order="", state_code=r.get('state') or "")
-                            if ok:
-                                added_count += 1
-                            else:
-                                failed_list.append({"gstin": r.get('gstin'), "error": err})
-                        st.success(f"Added {added_count}. Failed {len(failed_list)}.")
-                        safe_rerun()
-                with colC:
-                    if st.button("Clear Bulk Data"):
-                        st.session_state._bulk_df = None
-                        st.session_state._bulk_results = None
-                        safe_rerun()
-
-        # Edit / Delete existing clients
         st.subheader("Edit / Delete Client")
         clients_list = get_clients()
-        # build choices with Name | GST - STATE (if state_code exists)
         def client_label(c):
-            cid, name, gstin, addr, email, po, stc = c
-            stlabel = f"-{STATE_MAP.get(str(stc), stc)}" if stc else ""
+            cid, name, gstin, pan, addr, email, po, stc = c
+            stlbl = f"-{state_label_from_gst(gstin)}" if gstin else ""
             po_part = f" | PO:{po}" if po else ""
-            return f"{name} | {gstin} {stlabel}{po_part}"
-
+            return f"{name} | {gstin} {stlbl}{po_part}"
         clients_map = {client_label(c): c[0] for c in clients_list}
         sel = st.selectbox("Select client", options=["--select--"] + list(clients_map.keys()))
         if sel != "--select--":
@@ -885,7 +823,7 @@ def main():
                     pan2 = st.text_input("PAN", value=pan or "")
                     address2 = st.text_area("Address", value=address)
                     po2 = st.text_input("Purchase Order (optional)", value=po or "")
-                    st_code_display = st.text_input("State Code (auto)", value=stc or "", disabled=True)
+                    st_code_disp = st.text_input("State Code (auto)", value=stc or "", disabled=True)
                     col1, col2 = st.columns(2)
                     with col1:
                         if st.form_submit_button("Update Client"):
@@ -906,89 +844,98 @@ def main():
     elif mode == "Create Invoice":
         st.header("Create Invoice")
         clients = get_clients()
-        # create dropdown items with name|gst-state
-        client_options_list = []
+        client_options = []
         for c in clients:
-            cid, name, gstin, addr, email, po, stc = c
-            stlabel = f"-{STATE_MAP.get(str(stc), stc)}" if stc else ""
-            label = f"{name} | {gstin} {stlabel}"
-            client_options_list.append((label, cid))
-        client_options = ["--select--"] + [l for l,_ in client_options_list]
-        selected = st.selectbox("Select Client", options=client_options)
+            cid, name, gstin, pan, addr, email, po, stc = c
+            stlbl = f"-{state_label_from_gst(gstin)}" if gstin else ""
+            client_options.append((f"{name} | {gstin} {stlbl}", cid))
+        client_select = ["--select--"] + [lbl for lbl,_ in client_options]
+        selected = st.selectbox("Select Client", options=client_select)
         client_info = None
         if selected != "--select--":
-            # map back
-            cid = dict(client_options_list)[selected] if isinstance(selected,str) and selected in dict(client_options_list) else None
-            # fallback: find by label
-            if cid is None:
-                for lbl,cidv in client_options_list:
-                    if lbl == selected:
-                        cid = cidv
-                        break
+            # find id
+            cid = None
+            for lbl, idv in client_options:
+                if lbl == selected:
+                    cid = idv; break
             if cid:
                 rec = get_client_by_id(cid)
                 if rec:
-                    cid, name, gstin, pan, address, email, po, stc = rec
-                    client_info = {"id": cid, "name": name, "gstin": gstin, "pan": pan, "address": address, "purchase_order": po, "state_code": stc}
+                    cid, name, gstin, pan, address, email, purchase_order, state_code = rec
+                    client_info = {"id": cid, "name": name, "gstin": gstin, "pan": pan, "address": address, "purchase_order": purchase_order, "state_code": state_code}
 
         col1, col2 = st.columns(2)
         with col1:
             invoice_no = st.text_input("Invoice No", value=f"INV{int(datetime.now().timestamp())}")
             invoice_date = st.date_input("Invoice Date", value=date.today())
         with col2:
-            payment_mode = st.selectbox("Payment Mode", ["Bank", "UPI", "Cash"])
+            payment_mode = st.selectbox("Payment Mode", ["Bank","UPI","Cash"])
             training_dates = st.text_input("Training/Exam Dates (optional)")
 
-        st.subheader("Line Items")
+        st.subheader("Line Items (default items pre-populated)")
         if "rows" not in st.session_state:
             st.session_state.rows = [
-                {"slno":1,"particulars":"DEGREE","description":"Commercial Training And Coaching Services","sac_code":"999293","qty":1,"rate":100,"taxable_amount":100}
+                {"slno":1, "particulars":"DEGREE", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""},
+                {"slno":2, "particulars":"UNDER GRADUATE", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""},
+                {"slno":3, "particulars":"NO OF CANDIDATES", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""},
+                {"slno":4, "particulars":"EXAM FEE", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""},
+                {"slno":5, "particulars":"HAND BOOKS", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""},
+                {"slno":6, "particulars":"Advance Received", "description":"", "sac_code":"", "qty":"", "rate":""}
             ]
 
-        if st.button("Add New Row"):
-            st.session_state.rows.append({"slno": len(st.session_state.rows)+1, "particulars":"", "description":"", "sac_code":"", "qty":0, "rate":0, "taxable_amount":0})
+        if st.button("Add New Blank Row"):
+            st.session_state.rows.append({"slno": len(st.session_state.rows)+1, "particulars":"", "description":"", "sac_code":"", "qty":"", "rate":""})
             safe_rerun()
 
+        # Render editable rows — using text_input for qty and rate to allow blanks
         for idx in range(len(st.session_state.rows)):
             r = st.session_state.rows[idx]
             with st.expander(f"Row {r.get('slno', idx+1)}", expanded=False):
-                c1, c2, c3, c4, c5, c6, c7 = st.columns([1.0, 3.0, 4.0, 1.2, 1.0, 1.0, 1.0])
+                c1,c2,c3,c4,c5,c6,c7 = st.columns([1.0,3.0,4.0,1.2,1.0,1.0,1.0])
                 new_sl = c1.number_input("S.No", value=int(r.get('slno', idx+1)), min_value=1, step=1, key=f"sl_{idx}")
                 new_part = c2.text_input("Particulars", value=r.get('particulars',''), key=f"part_{idx}")
                 new_desc = c3.text_input("Description", value=r.get('description',''), key=f"desc_{idx}")
                 new_sac = c4.text_input("SAC", value=r.get('sac_code',''), key=f"sac_{idx}")
-                new_qty = c5.number_input("Qty", value=int(r.get('qty',0)), min_value=0, key=f"qty_{idx}")
-                new_rate = c6.number_input("Rate", value=float(r.get('rate',0.0)), min_value=0.0, key=f"rate_{idx}")
-                new_taxable = round(new_qty * new_rate, 2)
-                c7.write(f"Taxable: Rs. {new_taxable:,.2f}")
+                # qty and rate as text_input to allow blank
+                new_qty = c5.text_input("Qty (leave blank if NA)", value=str(r.get('qty','')), key=f"qty_{idx}")
+                new_rate = c6.text_input("Rate (leave blank if NA)", value=str(r.get('rate','')), key=f"rate_{idx}")
+                # compute taxable numeric if both provided
+                try:
+                    qv = float(new_qty.replace(",","")) if (new_qty is not None and str(new_qty).strip()!="") else None
+                except:
+                    qv = None
+                try:
+                    rv = float(new_rate.replace(",","")) if (new_rate is not None and str(new_rate).strip()!="") else None
+                except:
+                    rv = None
+                taxable_val = (qv * rv) if (qv is not None and rv is not None) else 0.0
+                c7.write(f"Taxable: Rs. {taxable_val:,.2f}" if (qv is not None and rv is not None) else "Taxable: -")
                 st.session_state.rows[idx].update({
                     "slno": new_sl,
                     "particulars": new_part,
                     "description": new_desc,
                     "sac_code": new_sac,
                     "qty": new_qty,
-                    "rate": new_rate,
-                    "taxable_amount": new_taxable
+                    "rate": new_rate
                 })
-                bcol1, bcol2, bcol3, bcol4 = st.columns([1,1,1,1])
-                with bcol1:
+                b1,b2,b3,b4 = st.columns([1,1,1,1])
+                with b1:
                     if st.button("Remove", key=f"remove_{idx}"):
-                        st.session_state.rows.pop(idx)
-                        safe_rerun()
-                with bcol2:
+                        st.session_state.rows.pop(idx); safe_rerun()
+                with b2:
                     if st.button("Duplicate", key=f"dup_{idx}"):
                         dup = st.session_state.rows[idx].copy()
                         st.session_state.rows.insert(idx+1, dup)
                         for i, rr in enumerate(st.session_state.rows, start=1):
                             rr['slno'] = i
                         safe_rerun()
-                with bcol3:
-                    if st.button("Move Up", key=f"up_{idx}") and idx > 0:
+                with b3:
+                    if st.button("Move Up", key=f"up_{idx}") and idx>0:
                         st.session_state.rows[idx-1], st.session_state.rows[idx] = st.session_state.rows[idx], st.session_state.rows[idx-1]
                         for i, rr in enumerate(st.session_state.rows, start=1):
                             rr['slno'] = i
                         safe_rerun()
-                with bcol4:
+                with b4:
                     if st.button("Move Down", key=f"down_{idx}") and idx < len(st.session_state.rows)-1:
                         st.session_state.rows[idx+1], st.session_state.rows[idx] = st.session_state.rows[idx], st.session_state.rows[idx+1]
                         for i, rr in enumerate(st.session_state.rows, start=1):
@@ -996,7 +943,7 @@ def main():
                         safe_rerun()
 
         if st.button("Add New Row (Bottom)"):
-            st.session_state.rows.append({"slno": len(st.session_state.rows)+1, "particulars":"", "description":"", "sac_code":"", "qty":0, "rate":0, "taxable_amount":0})
+            st.session_state.rows.append({"slno": len(st.session_state.rows)+1, "particulars":"", "description":"", "sac_code":"", "qty":"", "rate":""})
             safe_rerun()
 
         force_igst = st.checkbox("Force IGST (18%) manually", value=False)
@@ -1014,8 +961,20 @@ def main():
             except Exception as e:
                 st.error(f"Error reading file: {e}")
 
-        subtotal = sum([r['taxable_amount'] for r in st.session_state.rows])
-        st.metric("Subtotal", f"Rs. {subtotal:,.2f}")
+        # Show subtotal computed from rows where both qty & rate provided
+        subtotal_calc = 0.0
+        for r in st.session_state.rows:
+            try:
+                qv = float(str(r.get('qty','')).replace(",","")) if (r.get('qty') and str(r.get('qty')).strip()!="") else None
+            except:
+                qv = None
+            try:
+                rv = float(str(r.get('rate','')).replace(",","")) if (r.get('rate') and str(r.get('rate')).strip()!="") else None
+            except:
+                rv = None
+            if qv is not None and rv is not None:
+                subtotal_calc += (qv * rv)
+        st.metric("Subtotal", f"Rs. {subtotal_calc:,.2f}")
 
         if st.button("Generate PDF Invoice"):
             if not client_info:
@@ -1030,8 +989,8 @@ def main():
                 }
                 try:
                     pdf_path = generate_invoice_pdf(meta, st.session_state.rows, supporting_df)
-                    # Save invoice summary to DB
-                    subtotal_dec = float(sum([r['taxable_amount'] for r in st.session_state.rows]))
+                    # Save invoice meta to DB
+                    subtotal_dec = subtotal_calc
                     comp_state = gst_state_code(COMPANY.get('gstin',''))
                     cli_state = gst_state_code(client_info.get('gstin',''))
                     auto_igst = False
@@ -1056,14 +1015,13 @@ def main():
                     with open(pdf_path, "rb") as f:
                         st.download_button("Download PDF", f, file_name=os.path.basename(pdf_path), mime="application/pdf")
                 except Exception:
-                    st.error("Error generating PDF. See traceback below.")
+                    st.error("Error generating PDF. See traceback:")
                     st.text(traceback.format_exc())
 
     # ----- History -----
     else:
         st.header("Invoice History")
         conn = sqlite3.connect(DB_PATH)
-        # date filter
         col1, col2, col3 = st.columns([1,1,1])
         with col1:
             start_date = st.date_input("From", value=date.today() - timedelta(days=30))
@@ -1071,11 +1029,18 @@ def main():
             end_date = st.date_input("To", value=date.today())
         with col3:
             refresh = st.button("Refresh")
-        q = "SELECT inv.id, inv.invoice_no, inv.invoice_date, c.name, c.gstin, c.purchase_order, inv.subtotal, inv.sgst, inv.cgst, inv.igst, inv.total, inv.pdf_path FROM invoices inv LEFT JOIN clients c ON inv.client_id = c.id WHERE invoice_date BETWEEN ? AND ? ORDER BY inv.id DESC"
+        q = """
+            SELECT inv.id, inv.invoice_no, inv.invoice_date, c.name AS client_name, c.gstin AS client_gstin, c.purchase_order,
+                   inv.subtotal, inv.sgst, inv.cgst, inv.igst, inv.total, inv.pdf_path
+            FROM invoices inv
+            LEFT JOIN clients c ON inv.client_id = c.id
+            WHERE invoice_date BETWEEN ? AND ?
+            ORDER BY inv.id DESC
+        """
         dfhist = pd.read_sql_query(q, conn, params=(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")))
         conn.close()
         if dfhist.empty:
-            st.info("No invoices in the selected date range.")
+            st.info("No invoices in selected date range.")
         else:
             st.dataframe(dfhist)
 

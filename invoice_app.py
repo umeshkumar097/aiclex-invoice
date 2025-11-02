@@ -62,19 +62,18 @@ FONT_NAME = "Helvetica"
 if os.path.exists(COMPANY["calibri_ttf"]):
     try:
         pdfmetrics.registerFont(TTFont("Calibri", COMPANY["calibri_ttf"]))
-        FONT_NAME = "Calibri"
     except Exception:
         FONT_NAME = "Helvetica"
 
-# Styles
+# Styles - Reduced font sizes and leading for compact layout
 base_styles = getSampleStyleSheet()
-BODY_STYLE = ParagraphStyle("body", parent=base_styles["Normal"], fontName=FONT_NAME, fontSize=9, leading=11)
-HEADER_STYLE = ParagraphStyle("header", parent=base_styles["Normal"], fontName=FONT_NAME, fontSize=11, leading=12, alignment=1)
-TITLE_STYLE = ParagraphStyle("title", parent=base_styles["Heading1"], fontName=FONT_NAME, fontSize=16, leading=18, alignment=1)
-RIGHT_STYLE = ParagraphStyle("right", parent=base_styles["Normal"], fontName=FONT_NAME, fontSize=9, leading=11, alignment=2)
-DESC_STYLE = ParagraphStyle("desc", parent=base_styles["Normal"], fontName=FONT_NAME, fontSize=9, leading=11)
-TOTAL_LABEL_STYLE = ParagraphStyle("tot_label", parent=base_styles["Normal"], fontName=FONT_NAME, fontSize=10, leading=12)
-TOTAL_VALUE_STYLE = ParagraphStyle("tot_val", parent=base_styles["Normal"], fontName=FONT_NAME, fontSize=10, leading=12, alignment=2)
+BODY_STYLE = ParagraphStyle("body", parent=base_styles["Normal"], fontName=FONT_NAME, fontSize=8, leading=9.5)  # Reduced from 9/11
+HEADER_STYLE = ParagraphStyle("header", parent=base_styles["Normal"], fontName=FONT_NAME, fontSize=10, leading=11, alignment=1)  # Reduced from 11/12
+TITLE_STYLE = ParagraphStyle("title", parent=base_styles["Heading1"], fontName=FONT_NAME, fontSize=14, leading=16, alignment=1)  # Reduced from 16/18
+RIGHT_STYLE = ParagraphStyle("right", parent=base_styles["Normal"], fontName=FONT_NAME, fontSize=8, leading=9.5, alignment=2)  # Reduced from 9/11
+DESC_STYLE = ParagraphStyle("desc", parent=base_styles["Normal"], fontName=FONT_NAME, fontSize=8, leading=9.5)  # Reduced from 9/11
+TOTAL_LABEL_STYLE = ParagraphStyle("tot_label", parent=base_styles["Normal"], fontName=FONT_NAME, fontSize=9, leading=10.5)  # Reduced from 10/12
+TOTAL_VALUE_STYLE = ParagraphStyle("tot_val", parent=base_styles["Normal"], fontName=FONT_NAME, fontSize=9, leading=10.5, alignment=2)  # Reduced from 10/12
 FOOTER_STYLE = ParagraphStyle("footer", parent=base_styles["Normal"], fontName=FONT_NAME, fontSize=7, leading=8, alignment=1)
 
 # Helpers
@@ -213,6 +212,248 @@ def delete_client(cid):
     conn.commit()
     conn.close()
 
+
+def render_invoice_preview(meta, rows, subtotal, force_igst=False, advance_received=0.0):
+    """Render a professional bordered invoice preview in the Streamlit UI using HTML/CSS with light-grey borders."""
+    inv_no = meta.get('invoice_no', '')
+    inv_date = meta.get('invoice_date', '')
+    client = meta.get('client') or {}
+    client_name = client.get('name','') if isinstance(client, dict) else ''
+    client_gstin = client.get('gstin','') if isinstance(client, dict) else ''
+    
+    # Get Training/Exam Dates and Process Name from meta
+    train_val = meta.get('training_dates') or meta.get('training_exam_dates') or meta.get('training') or ""
+    process_val = meta.get('process_name') or ""
+    
+    # Calculate taxes on the original subtotal
+    if force_igst:
+        igst_val = subtotal * 0.18
+        sgst_val = 0.0
+        cgst_val = 0.0
+    else:
+        sgst_val = subtotal * 0.09
+        cgst_val = subtotal * 0.09
+        igst_val = 0.0
+    
+    # Calculate total after taxes
+    total_val = subtotal + sgst_val + cgst_val + igst_val
+    
+    # Subtract advance from final total
+    advance_amount = float(advance_received) if advance_received else 0.0
+    payable_to_crux = total_val - advance_amount
+
+    # Main container wrapping all invoice content - single parent div with zero top margin/padding
+    # Using inline CSS and style tag to override any Streamlit default margins
+    style_reset = "<style>div[data-testid='stMarkdownContainer'] { margin-top: 0 !important; padding-top: 0 !important; }</style>"
+    main_container_start = "<div style='width:100%;margin:0 !important;margin-top:0 !important;padding:0 !important;padding-top:0 !important;box-sizing:border-box;display:block'>"
+    
+    # Start with outer container with light-grey borders (no top margin)
+    invoice_container = "<div style='border:1px solid #ccc;margin-top:0;margin-bottom:6px'>"
+    
+    # Header block: INVOICE title
+    invoice_title = "<div style='border-bottom:1px solid #ccc;padding:8px;text-align:center;font-weight:700;font-size:18px'>INVOICE</div>"
+    
+    # GST/PAN/Phone row
+    gst_row = (
+        "<div style='border-bottom:1px solid #ccc;display:flex;font-size:12px'>"
+        f"<div style='flex:2;padding:8px;border-right:1px solid #ccc'><b>GST IN : </b>{COMPANY.get('gstin','')}</div>"
+        f"<div style='flex:2;padding:8px;border-right:1px solid #ccc'><b>PAN NO : </b>{COMPANY.get('pan','')}</div>"
+        f"<div style='flex:1;padding:8px'><b>Phone No. </b>{COMPANY.get('phone','')}</div>"
+        "</div>"
+    )
+    
+    # Service Location and Invoice Details with proper borders
+    details_section = (
+        "<div style='display:flex'>"
+        "<div style='flex:1;border-right:1px solid #ccc'>"
+        "<div style='border-bottom:1px solid #ccc;padding:8px;font-weight:bold'>Service Location</div>"
+        f"<div style='padding:8px'>"
+        f"To M/s: {client_name}<br/>"
+        f"{client.get('address', '').replace(chr(10), '<br/>')}</div>"
+        f"<div style='border-top:1px solid #ccc;border-bottom:1px solid #ccc;padding:8px'>"
+        f"GSTIN NO: {client_gstin}</div>"
+        "<div style='border-bottom:1px solid #ccc;padding:8px'>Purchase Order</div>"
+        "</div>"
+        "<div style='flex:1'>"
+        "<div style='border-bottom:1px solid #ccc;padding:8px'>"
+        f"<div><b>INVOICE NO. : </b>{inv_no}</div>"
+        "</div>"
+        "<div style='border-bottom:1px solid #ccc;padding:8px'>"
+        f"<div><b>DATE : </b>{inv_date}</div>"
+        "</div>"
+        "<div style='padding:8px'>"
+        "<div style='font-weight:bold;text-align:center;margin-bottom:12px;font-family:Arial,sans-serif;font-size:15px'>Vendor Electronic Remittance</div>"
+        "<table style='width:100%;border-collapse:collapse;border:1px solid #d3d3d3;background-color:#ffffff;font-family:Arial,sans-serif;font-size:14px'>"
+        f"<tr><td style='border:1px solid #d3d3d3;padding:10px;text-align:left;width:35%;background-color:#ffffff;font-weight:600'>Bank Name</td><td style='border:1px solid #d3d3d3;padding:10px;text-align:left;width:65%;background-color:#ffffff'>{COMPANY.get('bank_name', '')}</td></tr>"
+        f"<tr><td style='border:1px solid #d3d3d3;padding:10px;text-align:left;background-color:#ffffff;font-weight:600'>A/C No</td><td style='border:1px solid #d3d3d3;padding:10px;text-align:left;background-color:#ffffff'>{COMPANY.get('bank_account', '')}</td></tr>"
+        f"<tr><td style='border:1px solid #d3d3d3;padding:10px;text-align:left;background-color:#ffffff;font-weight:600'>IFS Code</td><td style='border:1px solid #d3d3d3;padding:10px;text-align:left;background-color:#ffffff'>{COMPANY.get('ifsc', '')}</td></tr>"
+        f"<tr><td style='border:1px solid #d3d3d3;padding:10px;text-align:left;background-color:#ffffff;font-weight:600'>Swift Code</td><td style='border:1px solid #d3d3d3;padding:10px;text-align:left;background-color:#ffffff'>{COMPANY.get('swift', '')}</td></tr>"
+        f"<tr><td style='border:1px solid #d3d3d3;padding:10px;text-align:left;background-color:#ffffff;font-weight:600'>MICR No</td><td style='border:1px solid #d3d3d3;padding:10px;text-align:left;background-color:#ffffff'>{COMPANY.get('micr', '')}</td></tr>"
+        f"<tr><td style='border:1px solid #d3d3d3;padding:10px;text-align:left;background-color:#ffffff;font-weight:600'>Branch</td><td style='border:1px solid #d3d3d3;padding:10px;text-align:left;background-color:#ffffff'>{COMPANY.get('branch', '')}</td></tr>"
+        "</table>"
+        "</div>"
+        "</div>"
+        "</div>"
+    )
+    
+    # Combine all sections
+    invoice_html = invoice_container + invoice_title + gst_row + details_section + "</div>"
+
+    # Add logo if it exists (removed top margin)
+    logo_html = ""
+    if os.path.exists(COMPANY.get('logo_top','')):
+        logo_path = COMPANY.get('logo_top')
+        logo_html = f"<div style='text-align:center;margin-top:0;margin-bottom:6px'><img src='file://{logo_path}' style='max-width:220px;max-height:60px'/></div>"
+
+    # Line items table with light-grey borders
+    table_html = [
+        '<table style="width:100%;border-collapse:collapse;font-family:Arial,Helvetica,sans-serif;border:1px solid #ccc;margin-top:6px">',
+        '<thead>',
+        '<tr>',
+        '<th style="border:1px solid #ccc;padding:8px;width:5%;text-align:center">S.NO</th>',
+        '<th style="border:1px solid #ccc;padding:8px;width:20%">PARTICULARS</th>',
+        '<th style="border:1px solid #ccc;padding:8px;width:35%">DESCRIPTION of SAC CODE</th>',
+        '<th style="border:1px solid #ccc;padding:8px;width:10%;text-align:center">SAC CODE</th>',
+        '<th style="border:1px solid #ccc;padding:8px;width:10%;text-align:center">QTY</th>',
+        '<th style="border:1px solid #ccc;padding:8px;width:10%;text-align:center">RATE</th>',
+        '<th style="border:1px solid #ccc;padding:8px;width:10%;text-align:center">TAXABLE AMOUNT</th>',
+        '</tr>',
+        '</thead>',
+        '<tbody>'
+    ]
+
+    for i, r in enumerate(rows, start=1):
+        try:
+            qty = float(str(r.get('qty','')).replace(',','')) if (r.get('qty') and str(r.get('qty')).strip()!='') else None
+        except:
+            qty = None
+        try:
+            rate = float(str(r.get('rate','')).replace(',','')) if (r.get('rate') and str(r.get('rate')).strip()!='') else None
+        except:
+            rate = None
+        taxable = qty * rate if (qty is not None and rate is not None) else ''
+        table_html.append('<tr>')
+        table_html.append(f'<td style="border:1px solid #ccc;padding:8px;text-align:center">{r.get("slno", i)}</td>')
+        part_val = r.get('particulars','')
+        table_html.append(f'<td style="border:1px solid #ccc;padding:8px">{part_val}</td>')
+        table_html.append(f'<td style="border:1px solid #ccc;padding:8px">{r.get("description","")}</td>')
+        table_html.append(f'<td style="border:1px solid #ccc;padding:8px;text-align:center">{r.get("sac_code","")}</td>')
+        table_html.append(f'<td style="border:1px solid #ccc;padding:8px;text-align:right">{("{:,}".format(qty)) if qty is not None else ""}</td>')
+        table_html.append(f'<td style="border:1px solid #ccc;padding:8px;text-align:right">{("{:,.2f}".format(rate)) if rate is not None else ""}</td>')
+        table_html.append(f'<td style="border:1px solid #ccc;padding:8px;text-align:right">{("{:,.2f}".format(taxable)) if taxable != "" else ""}</td>')
+        table_html.append('</tr>')
+
+    # Add Training/Exam Dates row if present
+    if train_val:
+        table_html.append('<tr>')
+        table_html.append('<td style="border:1px solid #ccc;padding:8px"></td>')
+        table_html.append('<td style="border:1px solid #ccc;padding:8px"><b>Training Dates/Exam Dates:</b></td>')
+        table_html.append(f'<td style="border:1px solid #ccc;padding:8px">{train_val}</td>')
+        table_html.append('<td style="border:1px solid #ccc;padding:8px"></td>')
+        table_html.append('<td style="border:1px solid #ccc;padding:8px"></td>')
+        table_html.append('<td style="border:1px solid #ccc;padding:8px"></td>')
+        table_html.append('<td style="border:1px solid #ccc;padding:8px"></td>')
+        table_html.append('</tr>')
+    
+    # Add Process Name row if present
+    if process_val:
+        table_html.append('<tr>')
+        table_html.append('<td style="border:1px solid #ccc;padding:8px"></td>')
+        table_html.append('<td style="border:1px solid #ccc;padding:8px"><b>Process Name:</b></td>')
+        table_html.append(f'<td style="border:1px solid #ccc;padding:8px">{process_val}</td>')
+        table_html.append('<td style="border:1px solid #ccc;padding:8px"></td>')
+        table_html.append('<td style="border:1px solid #ccc;padding:8px"></td>')
+        table_html.append('<td style="border:1px solid #ccc;padding:8px"></td>')
+        table_html.append('<td style="border:1px solid #ccc;padding:8px"></td>')
+        table_html.append('</tr>')
+    
+    # Add Advance Received row if present (below last inserted row)
+    if advance_received > 0:
+        table_html.append('<tr>')
+        table_html.append('<td style="border:1px solid #ccc;padding:8px"></td>')
+        table_html.append('<td style="border:1px solid #ccc;padding:8px"><b>Advance Received:</b></td>')
+        table_html.append(f'<td style="border:1px solid #ccc;padding:8px">{float(advance_received):,.2f}</td>')
+        table_html.append('<td style="border:1px solid #ccc;padding:8px"></td>')
+        table_html.append('<td style="border:1px solid #ccc;padding:8px"></td>')
+        table_html.append('<td style="border:1px solid #ccc;padding:8px"></td>')
+        table_html.append('<td style="border:1px solid #ccc;padding:8px"></td>')
+        table_html.append('</tr>')
+
+    # Subtotal row - spanning first 5 columns, value in last column, left-aligned label
+    table_html.append('<tr>')
+    table_html.append('<td colspan="5" style="border:1px solid #ccc;padding:8px;text-align:left;font-weight:700;background-color:#f5f5f5">Sub Total</td>')
+    table_html.append('<td style="border:1px solid #ccc;padding:8px;background-color:#f5f5f5"></td>')
+    table_html.append(f'<td style="border:1px solid #ccc;padding:8px;text-align:right;font-weight:700;background-color:#f5f5f5">{subtotal:,.2f}</td>')
+    table_html.append('</tr>')
+    
+    # Tax rows - 3 column format: Label (col 1-5, left-aligned), Percentage (col 6, left-aligned), Value (col 7, right-aligned)
+    table_html.append('<tr>')
+    table_html.append('<td colspan="5" style="border:1px solid #ccc;padding:8px;text-align:left">SGST</td>')
+    table_html.append('<td style="border:1px solid #ccc;padding:8px;text-align:left">9%</td>')
+    sgst_display = f"{sgst_val:,.2f}" if sgst_val > 0 else ""
+    table_html.append(f'<td style="border:1px solid #ccc;padding:8px;text-align:right">{sgst_display}</td>')
+    table_html.append('</tr>')
+    
+    table_html.append('<tr>')
+    table_html.append('<td colspan="5" style="border:1px solid #ccc;padding:8px;text-align:left">CGST</td>')
+    table_html.append('<td style="border:1px solid #ccc;padding:8px;text-align:left">9%</td>')
+    cgst_display = f"{cgst_val:,.2f}" if cgst_val > 0 else ""
+    table_html.append(f'<td style="border:1px solid #ccc;padding:8px;text-align:right">{cgst_display}</td>')
+    table_html.append('</tr>')
+    
+    table_html.append('<tr>')
+    table_html.append('<td colspan="5" style="border:1px solid #ccc;padding:8px;text-align:left">IGST</td>')
+    table_html.append('<td style="border:1px solid #ccc;padding:8px;text-align:left">18%</td>')
+    igst_display = f"{igst_val:,.2f}" if igst_val > 0 else ""
+    table_html.append(f'<td style="border:1px solid #ccc;padding:8px;text-align:right">{igst_display}</td>')
+    table_html.append('</tr>')
+    
+    # Total row - 3 column format with bold, left-aligned label
+    table_html.append('<tr>')
+    table_html.append('<td colspan="5" style="border:1px solid #ccc;padding:8px;text-align:left;font-weight:700;background-color:#f5f5f5"><b>TOTAL</b></td>')
+    table_html.append('<td style="border:1px solid #ccc;padding:8px;background-color:#f5f5f5"></td>')
+    table_html.append(f'<td style="border:1px solid #ccc;padding:8px;text-align:right;font-weight:700;background-color:#f5f5f5"><b>{total_val:,.2f}</b></td>')
+    table_html.append('</tr>')
+    
+    # Less Advance Received row - 3 column format, left-aligned label (only shown if > 0)
+    if advance_received > 0:
+        table_html.append('<tr>')
+        table_html.append('<td colspan="5" style="border:1px solid #ccc;padding:8px;text-align:left">Less Advance Received</td>')
+        table_html.append('<td style="border:1px solid #ccc;padding:8px"></td>')
+        table_html.append(f'<td style="border:1px solid #ccc;padding:8px;text-align:right">{float(advance_received):,.2f}</td>')
+        table_html.append('</tr>')
+    
+    # Payable To Crux row - 3 column format, bold with light grey background, left-aligned label
+    table_html.append('<tr>')
+    table_html.append('<td colspan="5" style="border:1px solid #ccc;padding:8px;text-align:left;font-weight:700;background-color:#f2f2f2"><b>Payable To Crux</b></td>')
+    table_html.append('<td style="border:1px solid #ccc;padding:8px;background-color:#f2f2f2"></td>')
+    table_html.append(f'<td style="border:1px solid #ccc;padding:8px;text-align:right;font-weight:700;background-color:#f2f2f2"><b>{payable_to_crux:,.2f}</b></td>')
+    table_html.append('</tr>')
+    
+    # In Words row - as part of the same continuous table
+    from num2words import num2words
+    try:
+        words = num2words(int(payable_to_crux), lang='en_IN', to='cardinal').title()
+        words_text = f"<b>In Words:</b> ({words})"
+    except:
+        words_text = ""
+    
+    if words_text:
+        table_html.append('<tr>')
+        table_html.append(f'<td colspan="7" style="border:1px solid #ccc;padding:8px;text-align:left">{words_text}</td>')
+        table_html.append('</tr>')
+    
+    table_html.append('</tbody></table>')
+    
+    # Close main container
+    main_container_end = "</div>"
+    
+    # Combine all content within the main container div (style reset first to override Streamlit defaults)
+    final_html = style_reset + main_container_start + logo_html + invoice_html + ''.join(table_html) + main_container_end
+    
+    # Render everything as a single unit with no top margin/padding
+    st.markdown(final_html, unsafe_allow_html=True)
+
 # GST API
 def fetch_gst_from_appyflow(gstin, timeout=8):
     gstin = str(gstin).strip()
@@ -270,6 +511,61 @@ class HR(Flowable):
         self.canv.setStrokeColor(self.color)
         self.canv.line(0,0,self.width,0)
 
+# Signature and company text handler for onPage callback
+def add_signature_and_company_text(canv, doc, signature_path, signature_width, signature_height, company_text_path):
+    """Callback function to add signature at bottom left and company_text at bottom of page 1"""
+    page_num = canv.getPageNumber()
+    if page_num == 1:
+        # Add signature at bottom left
+        if signature_path and os.path.exists(signature_path):
+            try:
+                # Position: 35mm from bottom to avoid overlap with content, 12mm from left (matching left margin)
+                sig_y_position = 35*mm  # Increased to 35mm to move stamp higher and avoid overlap
+                sig_x_position = 12*mm
+                
+                # Draw the signature image at fixed position on page 1
+                canv.drawImage(signature_path, sig_x_position, sig_y_position, 
+                              width=signature_width, height=signature_height, 
+                              preserveAspectRatio=True, mask='auto')
+            except Exception:
+                pass  # Silently fail if signature image cannot be drawn
+        
+        # Add company_text at bottom center (above signature)
+        if company_text_path and os.path.exists(company_text_path):
+            try:
+                # Get page dimensions
+                page_width = A4[0]
+                
+                # Load image to get dimensions - use PIL/Pillow approach
+                try:
+                    from PIL import Image as PILImage
+                    with PILImage.open(company_text_path) as img:
+                        img_width, img_height = img.size
+                except:
+                    # Fallback: try to open and measure using reportlab Image
+                    from reportlab.lib.utils import ImageReader
+                    img_reader = ImageReader(company_text_path)
+                    img_width, img_height = img_reader.getSize()
+                
+                # Scale to fit page width with margin (leaving ~20mm on each side)
+                max_width = page_width - 40*mm
+                scale = min(1.0, max_width / img_width) if img_width > 0 else 1.0
+                scaled_width = img_width * scale
+                scaled_height = img_height * scale
+                
+                # Position: bottom center, below signature
+                # Signature is at 25mm from bottom with height 31.3mm
+                # Place company_text below signature (closer to bottom)
+                comp_y_position = 10*mm  # Position below signature area, near bottom of page
+                comp_x_position = (page_width - scaled_width) / 2  # Centered horizontally
+                
+                # Draw the company_text image at bottom center
+                canv.drawImage(company_text_path, comp_x_position, comp_y_position, 
+                              width=scaled_width, height=scaled_height, 
+                              preserveAspectRatio=True, mask='auto')
+            except Exception:
+                pass  # Silently fail if company_text image cannot be drawn
+
 # ------------------ IMPORTANT: Updated generate_invoice_pdf ------------------
 def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     """
@@ -317,7 +613,20 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
 
     filename = f"Invoice_{invoice_meta.get('invoice_no','NA')}_{datetime.now().strftime('%Y%m%d%H%M%S')}.pdf"
     path = os.path.join(PDF_DIR, filename)
-    doc = SimpleDocTemplate(path, pagesize=A4, leftMargin=12*mm, rightMargin=12*mm, topMargin=12*mm, bottomMargin=12*mm)
+    # Minimized top margin to 3mm for maximum space efficiency
+    doc = SimpleDocTemplate(path, pagesize=A4, leftMargin=12*mm, rightMargin=12*mm, topMargin=3*mm, bottomMargin=12*mm)
+    
+    # Add signature and company_text to page 1 using onPage callback
+    signature_path = COMPANY.get('signature', '')
+    signature_width = 44.6*mm
+    signature_height = 31.3*mm
+    company_text_path = COMPANY.get('company_text', '')
+    
+    # Create a callback function that will be called on first page
+    def on_first_page(canv, doc):
+        add_signature_and_company_text(canv, doc, signature_path, signature_width, signature_height, company_text_path)
+    doc.onFirstPage = on_first_page
+    
     story = []
     page_width = A4[0] - (12*mm + 12*mm)
 
@@ -334,65 +643,135 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
             except Exception:
                 pass
 
-    # Header: INVOICE centered on its own row
-    story.append(Paragraph("INVOICE", TITLE_STYLE))
-    story.append(Spacer(1,6))
-
-    # Under header: GST left, PAN right (single row)
-    gst_html = f"<b>GST IN :</b> {COMPANY.get('gstin','')}"
-    pan_html = f"<b>PAN NO :</b> {COMPANY.get('pan','')}"
-    gst_pan_tbl = Table([[Paragraph(gst_html, BODY_STYLE), Paragraph(pan_html, RIGHT_STYLE)]], colWidths=[page_width*0.6, page_width*0.4])
-    gst_pan_tbl.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'), ('BOTTOMPADDING',(0,0),(-1,-1),6)]))
-    story.append(gst_pan_tbl)
-    story.append(Spacer(1,6))
-
-    # Now add logo, tagline, AND company_text all on same invoice page (logo centered, tagline under it, company_text under tagline)
-    # You can adjust sizes if required.
-    add_image_if(COMPANY.get('logo_top'), w_mm=87, h_mm=25.2, align='CENTER', spacer_after=6)
-    add_image_if(COMPANY.get('tagline'), w_mm=164.8, h_mm=5.4, align='CENTER', spacer_after=6)
-    # company_text image (previously footer) placed here on same page under tagline
-    add_image_if(COMPANY.get('company_text'), w_mm=177, h_mm=27.2, align='CENTER', spacer_after=6)
-
-    # Client & Invoice Details box (left / right)
-    client = invoice_meta.get('client', {}) or {}
-    left_lines = ["<b>Service Location</b>"]
-    if client.get('name'): left_lines.append(f"To M/s: {client.get('name')}")
-    if client.get('address'): left_lines.append(str(client.get('address')).replace("\n","<br/>"))
-    left_lines.append("<br/>")
-    if client.get('gstin'): left_lines.append(f"<b>GSTIN NO:</b> {client.get('gstin')}")
-    po = client.get('purchase_order','')
-    if po:
-        left_lines.append(f"<b>Purchase Order:</b> {po}")
-    left_html = "<br/>".join(left_lines)
-
-    inv_no = invoice_meta.get('invoice_no','')
-    inv_date = invoice_meta.get('invoice_date','')
-    right_lines = [
-        f"<b>INVOICE NO. :</b> {inv_no}",
-        f"<b>DATE :</b> {inv_date}",
-        "<br/>",
-        "<b>Vendor Electronic Remittance</b>",
-        f"Bank Name : {COMPANY.get('bank_name','')}",
-        f"A/C No : {COMPANY.get('bank_account','')}",
-        f"IFS Code : {COMPANY.get('ifsc','')}",
-        f"Swift Code : {COMPANY.get('swift','')}",
-        f"MICR No : {COMPANY.get('micr','')}",
-        f"Branch : {COMPANY.get('branch','')}"
-    ]
-    right_html = "<br/>".join(right_lines)
-
-    big_box = Table([[Paragraph(left_html, BODY_STYLE), Paragraph(right_html, BODY_STYLE)]], colWidths=[page_width*0.55, page_width*0.45])
-    big_box.setStyle(TableStyle([
-        ('BOX',(0,0),(-1,-1),0.6,colors.black),
-        ('INNERGRID',(0,0),(-1,-1),0.25,colors.grey),
-        ('VALIGN',(0,0),(-1,-1),'TOP'),
-        ('LEFTPADDING',(0,0),(-1,-1),6),
-        ('RIGHTPADDING',(0,0),(-1,-1),6),
-        ('BOTTOMPADDING',(0,0),(-1,-1),6),
-        ('TOPPADDING',(0,0),(-1,-1),6),
+    # Add company logo (centered) - no extra spacing before
+    if os.path.exists(COMPANY.get('logo_top','')):
+        logo = Image(COMPANY.get('logo_top'), width=220, height=60)
+        logo.hAlign = 'CENTER'
+        story.append(logo)
+    
+    # Add tagline image - minimal spacing after logo
+    if os.path.exists(COMPANY.get('tagline','')):
+        tagline = Image(COMPANY.get('tagline'), width=400, height=15)
+        tagline.hAlign = 'CENTER'
+        story.append(tagline)
+        story.append(Spacer(1, 2))  # Very minimal spacing after tagline (reduced from 4 to 2)
+    else:
+        # If no tagline, add very minimal spacing after logo
+        story.append(Spacer(1, 2))
+    
+    # Minimized space before invoice title (reduced from 4 to 2)
+    story.append(Spacer(1, 2))
+    
+    # 1. INVOICE title with single border - reduced padding for tighter layout
+    invoice_title = Table([[Paragraph("INVOICE", TITLE_STYLE)]], colWidths=[page_width])
+    invoice_title.setStyle(TableStyle([
+        ('LINEABOVE', (0,0), (-1,0), 1.0, colors.black),
+        ('LINEBELOW', (0,0), (-1,0), 1.0, colors.black),
+        ('LINEBEFORE', (0,0), (0,-1), 1.0, colors.black),
+        ('LINEAFTER', (-1,0), (-1,-1), 1.0, colors.black),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('TOPPADDING', (0,0), (-1,-1), 2),  # Aggressively reduced to 2
+        ('BOTTOMPADDING', (0,0), (-1,-1), 2),  # Aggressively reduced to 2
     ]))
-    story.append(big_box)
-    story.append(Spacer(1,8))
+    story.append(invoice_title)
+
+    # 2. GST/PAN/Phone row with shared borders
+    gst_data = [[
+        Paragraph(f"GST IN : {COMPANY.get('gstin','').upper()}", BODY_STYLE),  # GST number in uppercase
+        Paragraph(f"PAN NO : {COMPANY.get('pan','')}", BODY_STYLE),
+        Paragraph(f"Phone No. {COMPANY.get('phone','')}", RIGHT_STYLE)
+    ]]
+    gst_table = Table(gst_data, colWidths=[page_width*0.4, page_width*0.35, page_width*0.25])
+    gst_table.setStyle(TableStyle([
+        ('LINEABOVE', (0,0), (-1,0), 1.0, colors.black),
+        ('LINEBELOW', (0,-1), (-1,-1), 1.0, colors.black),
+        ('LINEBEFORE', (0,0), (0,-1), 1.0, colors.black),
+        ('LINEAFTER', (-1,0), (-1,-1), 1.0, colors.black),
+        ('LINEAFTER', (0,0), (0,-1), 1.0, colors.black),  # Vertical line after first column
+        ('LINEAFTER', (1,0), (1,-1), 1.0, colors.black),  # Vertical line after second column
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('TOPPADDING', (0,0), (-1,-1), 2),  # Aggressively reduced to 2
+        ('BOTTOMPADDING', (0,0), (-1,-1), 2),  # Aggressively reduced to 2
+        ('LEFTPADDING', (0,0), (-1,-1), 3),  # Aggressively reduced to 3
+        ('RIGHTPADDING', (0,0), (-1,-1), 3),  # Aggressively reduced to 3
+    ]))
+    story.append(gst_table)
+
+    # 3. Service Location and Invoice Details with shared borders
+    client = invoice_meta.get('client', {}) or {}
+    
+    # Create Vendor Electronic Remittance table with light grey borders (nested table)
+    light_grey = colors.HexColor('#D3D3D3')
+    bank_details_data = [
+        [Paragraph("<b>Bank Name</b>", BODY_STYLE), Paragraph(COMPANY.get('bank_name',''), BODY_STYLE)],
+        [Paragraph("<b>A/C No</b>", BODY_STYLE), Paragraph(COMPANY.get('bank_account',''), BODY_STYLE)],
+        [Paragraph("<b>IFS Code</b>", BODY_STYLE), Paragraph(COMPANY.get('ifsc',''), BODY_STYLE)],
+        [Paragraph("<b>Swift Code</b>", BODY_STYLE), Paragraph(COMPANY.get('swift',''), BODY_STYLE)],
+        [Paragraph("<b>MICR No</b>", BODY_STYLE), Paragraph(COMPANY.get('micr',''), BODY_STYLE)],
+        [Paragraph("<b>Branch</b>", BODY_STYLE), Paragraph(COMPANY.get('branch',''), BODY_STYLE)],
+    ]
+    
+    # Calculate width to fit within parent cell (accounting for parent padding)
+    parent_cell_width = page_width * 0.5
+    available_width = parent_cell_width - 12  # Subtract parent padding (6+6)
+    bank_table = Table(bank_details_data, colWidths=[available_width*0.38, available_width*0.62])
+    bank_table.setStyle(TableStyle([
+        # Light grey borders with thinner width (0.5 instead of 1.0) and reduced padding
+        ('BOX', (0,0), (-1,-1), 0.5, light_grey),
+        ('INNERGRID', (0,0), (-1,-1), 0.5, light_grey),
+        ('LINEAFTER', (0,0), (0,-1), 0.5, light_grey),  # Vertical line between label and value
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('TOPPADDING', (0,0), (-1,-1), 6),
+        ('BOTTOMPADDING', (0,0), (-1,-1), 6),
+        ('LEFTPADDING', (0,0), (-1,-1), 6),
+        ('RIGHTPADDING', (0,0), (-1,-1), 6),
+        ('ALIGN', (0,0), (0,-1), 'LEFT'),
+        ('ALIGN', (1,0), (1,-1), 'LEFT'),
+    ]))
+    
+    # Combine all details into a single table structure
+    details_data = [
+        # Headers row
+        [Paragraph("<b>Service Location</b>", HEADER_STYLE), 
+         Paragraph(f"<b>INVOICE NO. : </b>{invoice_meta.get('invoice_no','')}", BODY_STYLE)],
+        
+        # Address and Date row
+        [Paragraph(f"To M/s: {client.get('name','')}", BODY_STYLE),
+         Paragraph(f"<b>DATE : </b>{invoice_meta.get('invoice_date','')}", BODY_STYLE)],
+        
+        # Client address and Vendor header row
+        [Paragraph(client.get('address','').replace("\n", "<br/>"), BODY_STYLE),
+         Paragraph("<b>Vendor Electronic Remittance</b>", ParagraphStyle("vend_header", fontName=FONT_NAME, fontSize=11, leading=13, alignment=1))],
+        
+        # GSTIN and Bank details row
+        [Paragraph(f"GSTIN NO: {client.get('gstin','').upper()}", BODY_STYLE),  # Client GST number in uppercase
+         bank_table],  # Nested table for bank details
+        
+        # Purchase Order row
+        [Paragraph("Purchase Order", BODY_STYLE), ""]
+    ]
+
+    details_table = Table(details_data, colWidths=[page_width*0.5, page_width*0.5])
+    details_table.setStyle(TableStyle([
+        ('LINEABOVE', (0,0), (-1,0), 1.0, colors.black),
+        ('LINEBELOW', (0,-1), (-1,-1), 1.0, colors.black),
+        ('LINEBEFORE', (0,0), (0,-1), 1.0, colors.black),
+        ('LINEAFTER', (-1,0), (-1,-1), 1.0, colors.black),
+        ('LINEAFTER', (0,0), (0,-1), 1.0, colors.black),  # Vertical line between columns
+        ('LINEBELOW', (0,0), (-1,0), 1.0, colors.black),  # Line below headers
+        ('LINEBELOW', (0,3), (-1,3), 1.0, colors.black),  # Line above Purchase Order
+        # Box the GSTIN cell (left column, row index 3) so it has its own borders
+        ('BOX', (0,3), (0,3), 1.0, colors.black),
+        ('VALIGN', (0,0), (-1,-1), 'TOP'),
+        ('TOPPADDING', (0,0), (-1,-1), 2),  # Aggressively reduced to 2
+        ('BOTTOMPADDING', (0,0), (-1,-1), 2),  # Aggressively reduced to 2
+        ('LEFTPADDING', (0,0), (-1,-1), 3),  # Aggressively reduced to 3
+        ('RIGHTPADDING', (0,0), (-1,-1), 3),  # Aggressively reduced to 3
+    ]))
+    
+    story.append(details_table)
+    story.append(Spacer(1, 2))  # Aggressively reduced to 2
 
     # Items table
     headers = ["SL.NO","PARTICULARS","DESCRIPTION of SAC CODE","SAC CODE","QTY","RATE","TAXABLE AMOUNT"]
@@ -403,16 +782,13 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
         col_w = [w*scale for w in col_w]
 
     table_data = [[Paragraph(h, HEADER_STYLE) for h in headers]]
-    black_cells = []  # (col_idx, row_idx)
-    # We'll append rows and compute current row index dynamically to avoid whole-column black bug
+    # We'll append rows and compute current row index dynamically
     for r in prepared:
-        current_row_idx = len(table_data)  # header is 0, first data row will be index 1
         sl = str(r['slno'])
         part = r['particulars']
         desc = r['description']
         sac = r['sac_code']
-        # Display: if None => blank; if numeric 0 -> show 0.00? user wants blank instead of zero — they said zero shouldn't be written, blank would be fine.
-        # We'll display blank when None; if numeric 0.0 then display blank too (per user's preference).
+        # Display: if None => blank; if numeric 0 -> show blank (per user's preference)
         qty_display = "" if (r['qty'] is None or float(r['qty']) == 0.0) else (str(int(r['qty'])) if float(r['qty']).is_integer() else str(r['qty']))
         rate_display = "" if (r['rate'] is None or float(r['rate']) == 0.0) else f"{r['rate']:,.2f}"
         tax_display = "" if (r['qty'] is None or r['rate'] is None or (r['taxable_amount'] == Decimal("0.00"))) else f"{r['taxable_amount']:,.2f}"
@@ -428,47 +804,93 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
         ]
         table_data.append(row)
 
-        # BLACK CELL RULE: only when cell is truly blank (empty string) -> mark black
-        # (Do NOT mark black for '0' or '0.00' strings — we treat those as blank as per user)
-        cell_values = [qty_display, rate_display, tax_display]
-        for offset, val in enumerate(cell_values, start=4):  # columns 4,5,6 are qty,rate,tax
-            if val == "" or val is None:
-                black_cells.append((offset, current_row_idx))
-
     # ensure at least one data row exists
     if len(table_data) == 1:
         table_data.append([Paragraph("-", BODY_STYLE)] + [Paragraph("-", BODY_STYLE)]*(len(headers)-1))
 
+    # Append Training/Exam Dates inside the items table as a final row
+    # Label in PARTICULARS column, dynamic date value in DESCRIPTION column
+    train_val = invoice_meta.get('training_dates') or invoice_meta.get('training_exam_dates') or invoice_meta.get('training') or ""
+    if train_val:
+        # create a row where PARTICULARS column (index 1) has the label and DESCRIPTION column (index 2) has the date value
+        training_row = [Paragraph("", BODY_STYLE),
+                        Paragraph("<b>Training Dates/Exam Dates:</b>", BODY_STYLE),
+                        Paragraph(train_val, DESC_STYLE),
+                        Paragraph("", BODY_STYLE),
+                        Paragraph("", BODY_STYLE),
+                        Paragraph("", BODY_STYLE),
+                        Paragraph("", BODY_STYLE)]
+        table_data.append(training_row)
+    
+    # Append Process Name inside the items table as a final row (below Training/Exam Dates)
+    # Label in PARTICULARS column, dynamic value in DESCRIPTION column
+    process_val = invoice_meta.get('process_name') or ""
+    if process_val:
+        # create a row where PARTICULARS column (index 1) has the label and DESCRIPTION column (index 2) has the process name value
+        process_row = [Paragraph("", BODY_STYLE),
+                       Paragraph("<b>Process Name:</b>", BODY_STYLE),
+                       Paragraph(process_val, DESC_STYLE),
+                       Paragraph("", BODY_STYLE),
+                       Paragraph("", BODY_STYLE),
+                       Paragraph("", BODY_STYLE),
+                       Paragraph("", BODY_STYLE)]
+        table_data.append(process_row)
+    
+    # Append Advance Received inside the items table (below Process Name, if present)
+    # Label in PARTICULARS column, value in DESCRIPTION column
+    adv_received = invoice_meta.get('advance_received', 0) or 0
+    if adv_received > 0:
+        # create a row where PARTICULARS column (index 1) has the label and DESCRIPTION column (index 2) has the advance value
+        adv_row = [Paragraph("", BODY_STYLE),
+                   Paragraph("<b>Advance Received:</b>", BODY_STYLE),
+                   Paragraph(f"{float(adv_received):,.2f}", DESC_STYLE),
+                   Paragraph("", BODY_STYLE),
+                   Paragraph("", BODY_STYLE),
+                   Paragraph("", BODY_STYLE),
+                   Paragraph("", BODY_STYLE)]
+        table_data.append(adv_row)
+
     items_tbl = Table(table_data, colWidths=col_w, repeatRows=1)
     tbl_style = [
-        ('GRID',(0,0),(-1,-1),0.35,colors.black),
-        ('BACKGROUND',(0,0),(-1,0),colors.whitesmoke),
-        ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
-        ('ALIGN',(0,0),(0,-1),'CENTER'),
-        ('ALIGN',(-3,1),(-1,-1),'RIGHT'),
-        ('LEFTPADDING',(0,0),(-1,-1),6),
-        ('RIGHTPADDING',(0,0),(-1,-1),6),
-        ('TOPPADDING',(0,0),(-1,-1),6),
-        ('BOTTOMPADDING',(0,0),(-1,-1),6)
+        ('LINEABOVE', (0,0), (-1,0), 1.0, colors.black),  # Top border
+        ('LINEBELOW', (0,-1), (-1,-1), 1.0, colors.black),  # Bottom border
+        ('LINEBEFORE', (0,0), (0,-1), 1.0, colors.black),  # Left border
+        ('LINEAFTER', (-1,0), (-1,-1), 1.0, colors.black),  # Right border
+        ('LINEBELOW', (0,0), (-1,0), 1.0, colors.black),  # Header bottom border
+        ('LINEAFTER', (0,0), (0,-1), 1.0, colors.black),  # Column dividers
+        ('LINEAFTER', (1,0), (1,-1), 1.0, colors.black),
+        ('LINEAFTER', (2,0), (2,-1), 1.0, colors.black),
+        ('LINEAFTER', (3,0), (3,-1), 1.0, colors.black),
+        ('LINEAFTER', (4,0), (4,-1), 1.0, colors.black),
+        ('LINEAFTER', (5,0), (5,-1), 1.0, colors.black),
+        ('LINEBELOW', (0,0), (-1,-2), 0.5, colors.black),  # Thinner row dividers
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('ALIGN', (0,0), (0,-1), 'CENTER'),  # Center align first column
+        ('ALIGN', (-3,1), (-1,-1), 'RIGHT'),  # Right align last 3 columns
+        ('LEFTPADDING', (0,0), (-1,-1), 2),  # Aggressively reduced to 2
+        ('RIGHTPADDING', (0,0), (-1,-1), 2),  # Aggressively reduced to 2
+        ('TOPPADDING', (0,0), (-1,-1), 2),  # Aggressively reduced to 2
+        ('BOTTOMPADDING', (0,0), (-1,-1), 2),  # Aggressively reduced to 2
+        ('BACKGROUND', (0,0), (-1,0), colors.whitesmoke),  # Header background
     ]
-    # apply black only to the specific blank cells
-    for (cidx, ridx) in black_cells:
-        tbl_style.append(('BACKGROUND',(cidx,ridx),(cidx,ridx),colors.black))
-        tbl_style.append(('TEXTCOLOR',(cidx,ridx),(cidx,ridx),colors.white))
+    # Blank cells will appear as empty/white (no black background)
 
     items_tbl.setStyle(TableStyle(tbl_style))
     story.append(items_tbl)
-    story.append(Spacer(1,8))
+
+    
 
     # Totals calculation
     subtotal = sum([r['taxable_amount'] for r in prepared]) if prepared else Decimal("0.00")
     adv = Decimal(str(invoice_meta.get('advance_received', 0) or 0)).quantize(Decimal("0.01"))
+    
     comp_state = gst_state_code(COMPANY.get('gstin',''))
     cli_state = gst_state_code(client.get('gstin','')) if client.get('gstin') else ""
     use_igst = invoice_meta.get('use_igst', False)
     if comp_state and cli_state and comp_state != cli_state:
         use_igst = True
 
+    # Calculate taxes on the original subtotal
     if use_igst:
         igst = (subtotal * Decimal('0.18')).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         sgst = cgst = Decimal('0.00')
@@ -477,19 +899,25 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
         cgst = (subtotal * Decimal('0.09')).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
         igst = Decimal('0.00')
 
+    # Calculate total after taxes, then subtract advance from final total
     total = subtotal + sgst + cgst + igst
     net = (total - adv).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     totals_rows = []
     totals_rows.append([Paragraph("Sub Total", TOTAL_LABEL_STYLE), Paragraph(f"Rs. {subtotal:,.2f}", TOTAL_VALUE_STYLE)])
-    if use_igst:
-        totals_rows.append([Paragraph("IGST (18%)", TOTAL_LABEL_STYLE), Paragraph(f"Rs. {igst:,.2f}", TOTAL_VALUE_STYLE)])
-    else:
-        totals_rows.append([Paragraph("SGST (9%)", TOTAL_LABEL_STYLE), Paragraph(f"Rs. {sgst:,.2f}", TOTAL_VALUE_STYLE)])
-        totals_rows.append([Paragraph("CGST (9%)", TOTAL_LABEL_STYLE), Paragraph(f"Rs. {cgst:,.2f}", TOTAL_VALUE_STYLE)])
+    # Always show all tax rows (like preview), with empty values when not applicable
+    sgst_display = f"Rs. {sgst:,.2f}" if sgst > 0 else ""
+    totals_rows.append([Paragraph("SGST (9%)", TOTAL_LABEL_STYLE), Paragraph(sgst_display, TOTAL_VALUE_STYLE)])
+    cgst_display = f"Rs. {cgst:,.2f}" if cgst > 0 else ""
+    totals_rows.append([Paragraph("CGST (9%)", TOTAL_LABEL_STYLE), Paragraph(cgst_display, TOTAL_VALUE_STYLE)])
+    igst_display = f"Rs. {igst:,.2f}" if igst > 0 else ""
+    totals_rows.append([Paragraph("IGST (18%)", TOTAL_LABEL_STYLE), Paragraph(igst_display, TOTAL_VALUE_STYLE)])
+    totals_rows.append([Paragraph("<b>TOTAL</b>", ParagraphStyle("tot_bold_label", fontName=FONT_NAME, fontSize=11, leading=13)),
+                        Paragraph(f"<b>Rs. {total:,.2f}</b>", ParagraphStyle("tot_bold_val", fontName=FONT_NAME, fontSize=11, leading=13, alignment=2))])
+    # Show Less Advance Received row only if it exists (greater than 0)
     if adv > 0:
         totals_rows.append([Paragraph("Less Advance Received", TOTAL_LABEL_STYLE), Paragraph(f"Rs. {adv:,.2f}", TOTAL_VALUE_STYLE)])
-    totals_rows.append([Paragraph("<b>TOTAL</b>", ParagraphStyle("tot_bold_label", fontName=FONT_NAME, fontSize=11, leading=13)),
+    totals_rows.append([Paragraph("<b>Payable To Crux</b>", ParagraphStyle("tot_bold_label", fontName=FONT_NAME, fontSize=11, leading=13)),
                         Paragraph(f"<b>Rs. {net:,.2f}</b>", ParagraphStyle("tot_bold_val", fontName=FONT_NAME, fontSize=11, leading=13, alignment=2))])
 
     tot_tbl = Table(totals_rows, colWidths=[page_width*0.65, page_width*0.35], hAlign='RIGHT')
@@ -498,27 +926,19 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
         ('LINEABOVE',(0,-1),(-1,-1),0.8,colors.black),
         ('BACKGROUND', (0,-1), (-1,-1), colors.lightgrey),
         ('ALIGN',(1,0),(1,-1),'RIGHT'),
-        ('LEFTPADDING',(0,0),(-1,-1),6),
-        ('RIGHTPADDING',(0,0),(-1,-1),6)
+        ('LEFTPADDING',(0,0),(-1,-1),3),  # Aggressively reduced to 3
+        ('RIGHTPADDING',(0,0),(-1,-1),3),  # Aggressively reduced to 3
+        ('TOPPADDING',(0,0),(-1,-1),2),  # Added aggressive top padding reduction
+        ('BOTTOMPADDING',(0,0),(-1,-1),2)  # Added aggressive bottom padding reduction
     ]))
     story.append(tot_tbl)
-    story.append(Spacer(1,8))
+    story.append(Spacer(1, 2))  # Aggressively reduced to 2
 
     story.append(Paragraph(f"In Words : ( {rupees_in_words(net)} )", BODY_STYLE))
-    story.append(Spacer(1,10))
+    story.append(Spacer(1, 2))  # Aggressively reduced to 2 to prevent overlap
 
-    # Signature and authorised signatory
-    if COMPANY.get('signature') and os.path.exists(COMPANY.get('signature')):
-        try:
-            sig = Image(COMPANY['signature'], width=44.6*mm, height=31.3*mm)
-            sig.hAlign = 'LEFT'
-            story.append(sig)
-            story.append(Spacer(1,4))
-        except Exception:
-            pass
-    story.append(Paragraph("For " + COMPANY.get('name',''), BODY_STYLE))
-    story.append(Paragraph("Authorised Signatory", BODY_STYLE))
-    story.append(Spacer(1,10))
+    # Signature is now added via onFirstPage callback (removed from story flow)
+    # This ensures it appears on page 1 at bottom left regardless of content flow
 
     # (Do NOT append company_text again here — it's already displayed near header)
     # Supporting documents page(s)
@@ -861,7 +1281,8 @@ def main():
             invoice_date = st.date_input("Invoice Date", value=date.today())
         with col2:
             payment_mode = st.selectbox("Payment Mode", ["Bank","UPI","Cash"])
-            training_dates = st.text_input("Training/Exam Dates (optional)")
+            training_exam_dates = st.text_input("Training/Exam Dates (optional)")
+            process_name = st.text_input("Process Name (optional)")
 
         st.subheader("Line Items (default items pre-populated)")
         if "rows" not in st.session_state:
@@ -870,8 +1291,7 @@ def main():
                 {"slno":2, "particulars":"UNDER GRADUATE", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""},
                 {"slno":3, "particulars":"NO OF CANDIDATES", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""},
                 {"slno":4, "particulars":"EXAM FEE", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""},
-                {"slno":5, "particulars":"HAND BOOKS", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""},
-                {"slno":6, "particulars":"Advance Received", "description":"", "sac_code":"", "qty":"", "rate":""}
+                {"slno":5, "particulars":"HAND BOOKS", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""}
             ]
 
         if st.button("Add New Blank Row"):
@@ -880,52 +1300,69 @@ def main():
 
         for idx in range(len(st.session_state.rows)):
             r = st.session_state.rows[idx]
-            with st.expander(f"Row {r.get('slno', idx+1)}", expanded=False):
-                c1,c2,c3,c4,c5,c6,c7 = st.columns([1.0,3.0,4.0,1.2,1.0,1.0,1.0])
+            # Render a visible card-like row with columns (no expander)
+            st.markdown(
+                f"""
+                <div style="border:1px solid #e9ecef;border-radius:8px;padding:12px;margin-bottom:12px;background:#ffffff;">
+                    <div style="font-weight:600;margin-bottom:8px;">Row {r.get('slno', idx+1)}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            # Use a container so the inputs look grouped; columns match the desired row/column layout
+            with st.container():
+                c1, c2, c3, c4, c5, c6, c7 = st.columns([1.0, 3.0, 4.0, 1.2, 1.0, 1.0, 1.0])
                 new_sl = c1.number_input("S.No", value=int(r.get('slno', idx+1)), min_value=1, step=1, key=f"sl_{idx}")
-                new_part = c2.text_input("Particulars", value=r.get('particulars',''), key=f"part_{idx}")
-                new_desc = c3.text_input("Description", value=r.get('description',''), key=f"desc_{idx}")
-                new_sac = c4.text_input("SAC", value=r.get('sac_code',''), key=f"sac_{idx}")
-                new_qty = c5.text_input("Qty (leave blank if NA)", value=str(r.get('qty','')), key=f"qty_{idx}")
-                new_rate = c6.text_input("Rate (leave blank if NA)", value=str(r.get('rate','')), key=f"rate_{idx}")
+                new_part = c2.text_input("Particulars", value=r.get('particulars', ''), key=f"part_{idx}")
+                new_desc = c3.text_input("Description", value=r.get('description', ''), key=f"desc_{idx}")
+                new_sac = c4.text_input("SAC", value=r.get('sac_code', ''), key=f"sac_{idx}")
+                new_qty = c5.text_input("Qty", value=str(r.get('qty', '')), key=f"qty_{idx}")
+                new_rate = c6.text_input("Rate", value=str(r.get('rate', '')), key=f"rate_{idx}")
                 try:
-                    qv = float(new_qty.replace(",","")) if (new_qty and str(new_qty).strip()!="") else None
+                    qv = float(new_qty.replace(",", "")) if (new_qty and str(new_qty).strip() != "") else None
                 except:
                     qv = None
                 try:
-                    rv = float(new_rate.replace(",","")) if (new_rate and str(new_rate).strip()!="") else None
+                    rv = float(new_rate.replace(",", "")) if (new_rate and str(new_rate).strip() != "") else None
                 except:
                     rv = None
-                taxable_val = (qv * rv) if (qv is not None and rv is not None) else 0.0
-                c7.write(f"Taxable: Rs. {taxable_val:,.2f}" if (qv is not None and rv is not None) else "Taxable: -")
+                taxable_val = (qv * rv) if (qv is not None and rv is not None) else None
+                # Show taxable amount or placeholder
+                c7.write(f"Taxable: Rs. {taxable_val:,.2f}" if taxable_val is not None else "Taxable: -")
+                # Persist updates back to session_state
                 st.session_state.rows[idx].update({
                     "slno": new_sl,
                     "particulars": new_part,
                     "description": new_desc,
                     "sac_code": new_sac,
                     "qty": new_qty,
-                    "rate": new_rate
+                    "rate": new_rate,
                 })
-                b1,b2,b3,b4 = st.columns([1,1,1,1])
-                with b1:
+                # Action buttons in a single, compact row under the inputs
+                btn_col1, btn_col2, btn_col3, btn_col4 = st.columns([1, 1, 1, 1])
+                with btn_col1:
                     if st.button("Remove", key=f"remove_{idx}"):
-                        st.session_state.rows.pop(idx); safe_rerun()
-                with b2:
+                        st.session_state.rows.pop(idx)
+                        # reindex serial numbers
+                        for i, rr in enumerate(st.session_state.rows, start=1):
+                            rr['slno'] = i
+                        safe_rerun()
+                with btn_col2:
                     if st.button("Duplicate", key=f"dup_{idx}"):
                         dup = st.session_state.rows[idx].copy()
-                        st.session_state.rows.insert(idx+1, dup)
+                        st.session_state.rows.insert(idx + 1, dup)
                         for i, rr in enumerate(st.session_state.rows, start=1):
                             rr['slno'] = i
                         safe_rerun()
-                with b3:
-                    if st.button("Move Up", key=f"up_{idx}") and idx>0:
-                        st.session_state.rows[idx-1], st.session_state.rows[idx] = st.session_state.rows[idx], st.session_state.rows[idx-1]
+                with btn_col3:
+                    if st.button("Move Up", key=f"up_{idx}") and idx > 0:
+                        st.session_state.rows[idx - 1], st.session_state.rows[idx] = st.session_state.rows[idx], st.session_state.rows[idx - 1]
                         for i, rr in enumerate(st.session_state.rows, start=1):
                             rr['slno'] = i
                         safe_rerun()
-                with b4:
-                    if st.button("Move Down", key=f"down_{idx}") and idx < len(st.session_state.rows)-1:
-                        st.session_state.rows[idx+1], st.session_state.rows[idx] = st.session_state.rows[idx], st.session_state.rows[idx+1]
+                with btn_col4:
+                    if st.button("Move Down", key=f"down_{idx}") and idx < len(st.session_state.rows) - 1:
+                        st.session_state.rows[idx + 1], st.session_state.rows[idx] = st.session_state.rows[idx], st.session_state.rows[idx + 1]
                         for i, rr in enumerate(st.session_state.rows, start=1):
                             rr['slno'] = i
                         safe_rerun()
@@ -934,7 +1371,7 @@ def main():
             st.session_state.rows.append({"slno": len(st.session_state.rows)+1, "particulars":"", "description":"", "sac_code":"", "qty":"", "rate":""})
             safe_rerun()
 
-        force_igst = st.checkbox("Force IGST (18%) manually", value=False)
+        force_igst = st.checkbox("Force IGST manually", value=False)
         advance_received = st.number_input("Advance Received (if any)", min_value=0.0, value=0.0)
 
         uploaded_file = st.file_uploader("Upload Supporting Excel (.xlsx/.csv)", type=["xlsx","csv"])
@@ -961,6 +1398,22 @@ def main():
                 rv = None
             if qv is not None and rv is not None:
                 subtotal_calc += (qv * rv)
+
+        # Render on-screen preview that resembles the invoice layout
+        preview_meta = {
+            "invoice_no": invoice_no, 
+            "invoice_date": invoice_date.strftime("%d-%m-%Y"), 
+            "client": client_info,
+            "training_exam_dates": training_exam_dates,
+            "process_name": process_name
+        }
+        try:
+            render_invoice_preview(preview_meta, st.session_state.rows, subtotal_calc, force_igst, advance_received)
+        except Exception as e:
+            # If preview fails for any reason, still show subtotal
+            st.write("Preview unavailable")
+            st.error(f"Preview error: {str(e)}")
+
         st.metric("Subtotal", f"Rs. {subtotal_calc:,.2f}")
 
         if st.button("Generate PDF Invoice"):
@@ -972,7 +1425,10 @@ def main():
                     "invoice_date": invoice_date.strftime("%d-%m-%Y"),
                     "client": client_info,
                     "use_igst": force_igst,
-                    "advance_received": float(advance_received)
+                    "advance_received": float(advance_received),
+                    # include training/exam dates entered in the UI so PDF generator can render them
+                    "training_exam_dates": training_exam_dates,
+                    "process_name": process_name
                 }
                 try:
                     pdf_path = generate_invoice_pdf(meta, st.session_state.rows, supporting_df)

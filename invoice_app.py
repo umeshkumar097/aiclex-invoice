@@ -220,6 +220,7 @@ def render_invoice_preview(meta, rows, subtotal, force_igst=False, advance_recei
     client = meta.get('client') or {}
     client_name = client.get('name','') if isinstance(client, dict) else ''
     client_gstin = client.get('gstin','') if isinstance(client, dict) else ''
+    client_po = client.get('purchase_order','') if isinstance(client, dict) else ''
     
     # Get Training/Exam Dates and Process Name from meta
     train_val = meta.get('training_dates') or meta.get('training_exam_dates') or meta.get('training') or ""
@@ -272,7 +273,7 @@ def render_invoice_preview(meta, rows, subtotal, force_igst=False, advance_recei
         f"{client.get('address', '').replace(chr(10), '<br/>')}</div>"
         f"<div style='border-top:1px solid #ccc;border-bottom:1px solid #ccc;padding:8px'>"
         f"GSTIN NO: {client_gstin}</div>"
-        "<div style='border-bottom:1px solid #ccc;padding:8px'>Purchase Order</div>"
+        f"<div style='border-bottom:1px solid #ccc;padding:8px'>Purchase Order: {client_po}</div>"
         "</div>"
         "<div style='flex:1'>"
         "<div style='border-bottom:1px solid #ccc;padding:8px'>"
@@ -748,8 +749,8 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
         [Paragraph(f"GSTIN NO: {client.get('gstin','').upper()}", BODY_STYLE),  # Client GST number in uppercase
          bank_table],  # Nested table for bank details
         
-        # Purchase Order row
-        [Paragraph("Purchase Order", BODY_STYLE), ""]
+        # Purchase Order row (show value from selected client)
+        [Paragraph(f"Purchase Order: {client.get('purchase_order','')}", BODY_STYLE), ""]
     ]
 
     details_table = Table(details_data, colWidths=[page_width*0.5, page_width*0.5])

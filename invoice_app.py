@@ -4,7 +4,7 @@
 #
 # Requirements:
 # pip install streamlit pandas reportlab num2words openpyxl requests
-
+# testing
 import streamlit as st
 import sqlite3
 from datetime import date, datetime, timedelta
@@ -1292,7 +1292,7 @@ def main():
 
         col1, col2 = st.columns(2)
         with col1:
-            invoice_no = st.text_input("Invoice No", value=f"INV{int(datetime.now().timestamp())}")
+            invoice_no = st.text_input("Invoice No", value="")
             invoice_date = st.date_input("Invoice Date", value=date.today())
         with col2:
             payment_mode = st.selectbox("Payment Mode", ["Bank","UPI","Cash"])
@@ -1435,45 +1435,48 @@ def main():
             if not client_info:
                 st.error("Select a client first.")
             else:
-                meta = {
-                    "invoice_no": invoice_no,
-                    "invoice_date": invoice_date.strftime("%d-%m-%Y"),
-                    "client": client_info,
-                    "use_igst": force_igst,
-                    "advance_received": float(advance_received),
-                    # include training/exam dates entered in the UI so PDF generator can render them
-                    "training_exam_dates": training_exam_dates,
-                    "process_name": process_name
-                }
-                try:
-                    pdf_path = generate_invoice_pdf(meta, st.session_state.rows, supporting_df)
-                    subtotal_dec = subtotal_calc
-                    comp_state = gst_state_code(COMPANY.get('gstin',''))
-                    cli_state = gst_state_code(client_info.get('gstin',''))
-                    auto_igst = False
-                    if comp_state and cli_state and comp_state != cli_state:
-                        auto_igst = True
-                    use_igst_final = force_igst or auto_igst
-                    if use_igst_final:
-                        igst_val = subtotal_dec * 0.18
-                        sgst_val = cgst_val = 0.0
-                    else:
-                        sgst_val = subtotal_dec * 0.09
-                        cgst_val = subtotal_dec * 0.09
-                        igst_val = 0.0
-                    total_val = subtotal_dec + sgst_val + cgst_val + igst_val - float(advance_received)
-                    conn = sqlite3.connect(DB_PATH)
-                    cur = conn.cursor()
-                    cur.execute("INSERT INTO invoices (invoice_no, invoice_date, client_id, subtotal, sgst, cgst, igst, total, pdf_path) VALUES (?,?,?,?,?,?,?,?,?)",
-                                (meta['invoice_no'], invoice_date.strftime("%Y-%m-%d"), client_info['id'], subtotal_dec, sgst_val, cgst_val, igst_val, total_val, pdf_path))
-                    conn.commit()
-                    conn.close()
-                    st.success(f"PDF generated: {pdf_path}")
-                    with open(pdf_path, "rb") as f:
-                        st.download_button("Download PDF", f, file_name=os.path.basename(pdf_path), mime="application/pdf")
-                except Exception:
-                    st.error("Error generating PDF. See traceback:")
-                    st.text(traceback.format_exc())
+                if not str(invoice_no).strip():
+                    st.error("Enter Invoice No.")
+                else:
+                    meta = {
+                        "invoice_no": invoice_no,
+                        "invoice_date": invoice_date.strftime("%d-%m-%Y"),
+                        "client": client_info,
+                        "use_igst": force_igst,
+                        "advance_received": float(advance_received),
+                        # include training/exam dates entered in the UI so PDF generator can render them
+                        "training_exam_dates": training_exam_dates,
+                        "process_name": process_name
+                    }
+                    try:
+                        pdf_path = generate_invoice_pdf(meta, st.session_state.rows, supporting_df)
+                        subtotal_dec = subtotal_calc
+                        comp_state = gst_state_code(COMPANY.get('gstin',''))
+                        cli_state = gst_state_code(client_info.get('gstin',''))
+                        auto_igst = False
+                        if comp_state and cli_state and comp_state != cli_state:
+                            auto_igst = True
+                        use_igst_final = force_igst or auto_igst
+                        if use_igst_final:
+                            igst_val = subtotal_dec * 0.18
+                            sgst_val = cgst_val = 0.0
+                        else:
+                            sgst_val = subtotal_dec * 0.09
+                            cgst_val = subtotal_dec * 0.09
+                            igst_val = 0.0
+                        total_val = subtotal_dec + sgst_val + cgst_val + igst_val - float(advance_received)
+                        conn = sqlite3.connect(DB_PATH)
+                        cur = conn.cursor()
+                        cur.execute("INSERT INTO invoices (invoice_no, invoice_date, client_id, subtotal, sgst, cgst, igst, total, pdf_path) VALUES (?,?,?,?,?,?,?,?,?)",
+                                    (meta['invoice_no'], invoice_date.strftime("%Y-%m-%d"), client_info['id'], subtotal_dec, sgst_val, cgst_val, igst_val, total_val, pdf_path))
+                        conn.commit()
+                        conn.close()
+                        st.success(f"PDF generated: {pdf_path}")
+                        with open(pdf_path, "rb") as f:
+                            st.download_button("Download PDF", f, file_name=os.path.basename(pdf_path), mime="application/pdf")
+                    except Exception:
+                        st.error("Error generating PDF. See traceback:")
+                        st.text(traceback.format_exc())
 
     # History
     else:

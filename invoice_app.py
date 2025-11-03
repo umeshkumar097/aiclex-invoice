@@ -1262,7 +1262,7 @@ def main():
                                 st.success("Updated")
                                 safe_rerun()
                     with col2:
-                        if st.button("Delete Client"):
+                        if st.form_submit_button("Delete Client"):
                             delete_client(cid)
                             st.success("Deleted")
                             safe_rerun()

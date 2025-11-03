@@ -1,0 +1,50 @@
+# Ignore test files
+_test_generate_pdf.py
+# Generated PDFs - don't commit invoice PDFs
+generated_pdfs/*.pdf
+generated_pdfs/
+
+# Database files - don't commit local database
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment and secrets
+.env
+.env.local
+.streamlit/secrets.toml
+
+# Test files
+_test_*.py
+*.test.py
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.bak
+*.cache
+
+# Note: assets/ folder IS tracked - it contains required fonts and images for invoices
+

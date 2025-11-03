@@ -16,7 +16,7 @@ from num2words import num2words
 from decimal import Decimal, ROUND_HALF_UP
 import time
 
-# ReportLab
+# ReportLabb
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.units import mm
@@ -554,7 +554,7 @@ def add_signature_and_company_text(canv, doc, signature_path, signature_width, s
                 scaled_width = img_width * scale
                 scaled_height = img_height * scale
                 
-                # Position: bottom center, below signature
+                # Position: bottom center, below signaturE
                 # Signature is at 25mm from bottom with height 31.3mm
                 # Place company_text below signature (closer to bottom)
                 comp_y_position = 10*mm  # Position below signature area, near bottom of page

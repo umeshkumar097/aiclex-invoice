@@ -1303,7 +1303,7 @@ def main():
         st.subheader("Line Items (default items pre-populated)")
         if "rows" not in st.session_state:
             st.session_state.rows = [
-                {"slno":1, "particulars":"DEGREE", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""},
+                {"slno":1, "particulars":"GRADUATE", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""},
                 {"slno":2, "particulars":"UNDER GRADUATE", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""},
                 {"slno":3, "particulars":"NO OF CANDIDATES", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""},
                 {"slno":4, "particulars":"EXAM FEE", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""},

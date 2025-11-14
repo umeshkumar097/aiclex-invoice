@@ -171,6 +171,20 @@ def migrate_db_add_columns():
             cur.execute("ALTER TABLE clients ADD COLUMN state_code TEXT")
         except:
             pass
+    # Add default line item columns
+    default_item_cols = [
+        "graduate_qty", "graduate_rate",
+        "undergraduate_qty", "undergraduate_rate",
+        "candidates_qty", "candidates_rate",
+        "exam_fee_qty", "exam_fee_rate",
+        "handbooks_qty", "handbooks_rate"
+    ]
+    for col in default_item_cols:
+        if col not in cols:
+            try:
+                cur.execute(f"ALTER TABLE clients ADD COLUMN {col} TEXT")
+            except:
+                pass
     conn.commit()
     conn.close()
 
@@ -183,15 +197,29 @@ def get_clients():
 
 def get_client_by_id(cid):
     conn = sqlite3.connect(DB_PATH)
-    row = conn.execute("SELECT id,name,gstin,pan,address,email,purchase_order,state_code FROM clients WHERE id=?", (cid,)).fetchone()
+    row = conn.execute("""SELECT id,name,gstin,pan,address,email,purchase_order,state_code,
+                         graduate_qty,graduate_rate,undergraduate_qty,undergraduate_rate,
+                         candidates_qty,candidates_rate,exam_fee_qty,exam_fee_rate,
+                         handbooks_qty,handbooks_rate FROM clients WHERE id=?""", (cid,)).fetchone()
     conn.close()
     return row
 
-def add_client(name, gstin, pan, address, email="", purchase_order="", state_code=""):
+def add_client(name, gstin, pan, address, email="", purchase_order="", state_code="",
+               graduate_qty="", graduate_rate="", undergraduate_qty="", undergraduate_rate="",
+               candidates_qty="", candidates_rate="", exam_fee_qty="", exam_fee_rate="",
+               handbooks_qty="", handbooks_rate=""):
     conn = sqlite3.connect(DB_PATH)
     try:
-        conn.execute("INSERT OR REPLACE INTO clients (name,gstin,pan,address,email,purchase_order,state_code) VALUES (?,?,?,?,?,?,?)",
-                     (name,gstin,pan,address,email,purchase_order,state_code))
+        conn.execute("""INSERT OR REPLACE INTO clients 
+                        (name,gstin,pan,address,email,purchase_order,state_code,
+                         graduate_qty,graduate_rate,undergraduate_qty,undergraduate_rate,
+                         candidates_qty,candidates_rate,exam_fee_qty,exam_fee_rate,
+                         handbooks_qty,handbooks_rate) 
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                     (name,gstin,pan,address,email,purchase_order,state_code,
+                      graduate_qty,graduate_rate,undergraduate_qty,undergraduate_rate,
+                      candidates_qty,candidates_rate,exam_fee_qty,exam_fee_rate,
+                      handbooks_qty,handbooks_rate))
         conn.commit()
         return True, None
     except Exception as e:
@@ -199,10 +227,19 @@ def add_client(name, gstin, pan, address, email="", purchase_order="", state_cod
     finally:
         conn.close()
 
-def update_client(cid, name, gstin, pan, address, email="", purchase_order="", state_code=""):
+def update_client(cid, name, gstin, pan, address, email="", purchase_order="", state_code="",
+                 graduate_qty="", graduate_rate="", undergraduate_qty="", undergraduate_rate="",
+                 candidates_qty="", candidates_rate="", exam_fee_qty="", exam_fee_rate="",
+                 handbooks_qty="", handbooks_rate=""):
     conn = sqlite3.connect(DB_PATH)
-    conn.execute("UPDATE clients SET name=?,gstin=?,pan=?,address=?,email=?,purchase_order=?,state_code=? WHERE id=?",
-                 (name,gstin,pan,address,email,purchase_order,state_code,cid))
+    conn.execute("""UPDATE clients SET name=?,gstin=?,pan=?,address=?,email=?,purchase_order=?,state_code=?,
+                    graduate_qty=?,graduate_rate=?,undergraduate_qty=?,undergraduate_rate=?,
+                    candidates_qty=?,candidates_rate=?,exam_fee_qty=?,exam_fee_rate=?,
+                    handbooks_qty=?,handbooks_rate=? WHERE id=?""",
+                 (name,gstin,pan,address,email,purchase_order,state_code,
+                  graduate_qty,graduate_rate,undergraduate_qty,undergraduate_rate,
+                  candidates_qty,candidates_rate,exam_fee_qty,exam_fee_rate,
+                  handbooks_qty,handbooks_rate,cid))
     conn.commit()
     conn.close()
 
@@ -276,11 +313,9 @@ def render_invoice_preview(meta, rows, subtotal, force_igst=False, advance_recei
         f"<div style='border-bottom:1px solid #ccc;padding:8px'>Purchase Order: {client_po}</div>"
         "</div>"
         "<div style='flex:1'>"
-        "<div style='border-bottom:1px solid #ccc;padding:8px'>"
-        f"<div><b>INVOICE NO. : </b>{inv_no}</div>"
-        "</div>"
-        "<div style='border-bottom:1px solid #ccc;padding:8px'>"
-        f"<div><b>DATE : </b>{inv_date}</div>"
+        "<div style='border-top:1px solid #ccc;border-bottom:1px solid #ccc;padding:8px;display:flex;justify-content:space-between;align-items:stretch;min-height:40px;position:relative'>"
+        f"<div style='flex:1;padding-right:8px;display:flex;align-items:center;position:relative'><b>INVOICE NO. : </b>{inv_no}<div style='position:absolute;right:0;top:-8px;bottom:-8px;width:1px;background-color:#ccc;z-index:1'></div></div>"
+        f"<div style='flex:1;padding-left:8px;display:flex;align-items:center'><b>DATE : </b>{inv_date}</div>"
         "</div>"
         "<div style='padding:8px'>"
         "<div style='font-weight:bold;text-align:center;margin-bottom:12px;font-family:Arial,sans-serif;font-size:15px'>Vendor Electronic Remittance</div>"
@@ -479,6 +514,7 @@ def fetch_gst_from_appyflow(gstin, timeout=8):
         info = j.get("taxpayerInfo") or j.get("taxpayerinfo") or j.get("taxpayer") or j
         name = info.get("tradeNam") or info.get("lgnm") or info.get("tradeName") or info.get("name") or ""
         addr = ""
+        state_code_from_api = None
         try:
             pradr = info.get("pradr",{}) or {}
             a = pradr.get("addr",{}) or {}
@@ -488,6 +524,17 @@ def fetch_gst_from_appyflow(gstin, timeout=8):
                 if v:
                     parts.append(str(v))
             addr = ", ".join(parts)
+            # Try to extract state code from API response
+            if a.get("stcd"):
+                state_code_from_api = str(a.get("stcd")).strip().zfill(2)  # Ensure 2 digits
+            elif a.get("STCD"):
+                state_code_from_api = str(a.get("STCD")).strip().zfill(2)
+            # Also check if state code is in the main info object
+            if not state_code_from_api:
+                if info.get("stcd"):
+                    state_code_from_api = str(info.get("stcd")).strip().zfill(2)
+                elif info.get("STCD"):
+                    state_code_from_api = str(info.get("STCD")).strip().zfill(2)
         except:
             addr = ""
         pan = None
@@ -496,7 +543,8 @@ def fetch_gst_from_appyflow(gstin, timeout=8):
                 pan = str(info.get(pk)).strip(); break
         if not pan and len(gstin) >= 12:
             pan = gstin[2:12].upper()
-        state_code = gst_state_code(gstin)
+        # Use state code from API if available, otherwise derive from GSTIN
+        state_code = state_code_from_api or gst_state_code(gstin)
         return {"ok": True, "name": name, "address": addr, "gstin": gstin, "pan": pan, "state_code": state_code, "raw": j}
     else:
         msg = j.get("message") if isinstance(j, dict) else str(j)
@@ -732,36 +780,47 @@ def generate_invoice_pdf(invoice_meta, line_items, supporting_df=None):
     ]))
     
     # Combine all details into a single table structure
+    # For the header row, we'll use a 3-column layout: Service Location | Invoice No | Date
     details_data = [
-        # Headers row
+        # Headers row - 3 columns to allow vertical divider between invoice no and date
         [Paragraph("<b>Service Location</b>", HEADER_STYLE), 
-         Paragraph(f"<b>INVOICE NO. : </b>{invoice_meta.get('invoice_no','')}", BODY_STYLE)],
-        
-        # Address and Date row
-        [Paragraph(f"To M/s: {client.get('name','')}", BODY_STYLE),
+         Paragraph(f"<b>INVOICE NO. : </b>{invoice_meta.get('invoice_no','')}", BODY_STYLE),
          Paragraph(f"<b>DATE : </b>{invoice_meta.get('invoice_date','')}", BODY_STYLE)],
+        
+        # Address row - Service Location spans 1 col, Invoice No and Date columns merged
+        [Paragraph(f"To M/s: {client.get('name','')}", BODY_STYLE),
+         Paragraph("", BODY_STYLE),
+         Paragraph("", BODY_STYLE)],
         
         # Client address and Vendor header row
         [Paragraph(client.get('address','').replace("\n", "<br/>"), BODY_STYLE),
-         Paragraph("<b>Vendor Electronic Remittance</b>", ParagraphStyle("vend_header", fontName=FONT_NAME, fontSize=11, leading=13, alignment=1))],
+         Paragraph("<b>Vendor Electronic Remittance</b>", ParagraphStyle("vend_header", fontName=FONT_NAME, fontSize=11, leading=13, alignment=1)),
+         Paragraph("", BODY_STYLE)],
         
         # GSTIN and Bank details row
         [Paragraph(f"GSTIN NO: {client.get('gstin','').upper()}", BODY_STYLE),  # Client GST number in uppercase
-         bank_table],  # Nested table for bank details
+         bank_table,  # Nested table for bank details
+         Paragraph("", BODY_STYLE)],
         
         # Purchase Order row (show value from selected client)
-        [Paragraph(f"Purchase Order: {client.get('purchase_order','')}", BODY_STYLE), ""]
+        [Paragraph(f"Purchase Order: {client.get('purchase_order','')}", BODY_STYLE), "", ""]
     ]
 
-    details_table = Table(details_data, colWidths=[page_width*0.5, page_width*0.5])
+    details_table = Table(details_data, colWidths=[page_width*0.5, page_width*0.25, page_width*0.25])
     details_table.setStyle(TableStyle([
         ('LINEABOVE', (0,0), (-1,0), 1.0, colors.black),
         ('LINEBELOW', (0,-1), (-1,-1), 1.0, colors.black),
         ('LINEBEFORE', (0,0), (0,-1), 1.0, colors.black),
         ('LINEAFTER', (-1,0), (-1,-1), 1.0, colors.black),
-        ('LINEAFTER', (0,0), (0,-1), 1.0, colors.black),  # Vertical line between columns
+        ('LINEAFTER', (0,0), (0,-1), 1.0, colors.black),  # Vertical line after Service Location column
+        ('LINEAFTER', (1,0), (1,0), 1.0, colors.black),  # Vertical line between Invoice No and Date - ONLY in row 0
         ('LINEBELOW', (0,0), (-1,0), 1.0, colors.black),  # Line below headers
         ('LINEBELOW', (0,3), (-1,3), 1.0, colors.black),  # Line above Purchase Order
+        # Span columns 1 and 2 for rows below the header (merge Invoice No and Date columns)
+        ('SPAN', (1,1), (2,1)),  # Address row
+        ('SPAN', (1,2), (2,2)),  # Client address row
+        ('SPAN', (1,3), (2,3)),  # GSTIN row
+        ('SPAN', (1,4), (2,4)),  # Purchase Order row
         # Box the GSTIN cell (left column, row index 3) so it has its own borders
         ('BOX', (0,3), (0,3), 1.0, colors.black),
         ('VALIGN', (0,0), (-1,-1), 'TOP'),
@@ -1142,13 +1201,37 @@ def main():
             pan = st.text_input("PAN (optional)")
             address = st.text_area("Address")
             purchase_order = st.text_input("Purchase Order (optional)")
+            
+            st.markdown("---")
+            st.markdown("### Default Line Items (Optional)")
+            st.caption("Set default quantities and rates that will auto-populate when creating invoices for this client")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                graduate_qty = st.text_input("GRADUATE - Qty", value="", key="add_grad_qty")
+                undergraduate_qty = st.text_input("UNDER GRADUATE - Qty", value="", key="add_undergrad_qty")
+                candidates_qty = st.text_input("NO OF CANDIDATES - Qty", value="", key="add_candidates_qty")
+                exam_fee_qty = st.text_input("EXAM FEE - Qty", value="", key="add_exam_qty")
+                handbooks_qty = st.text_input("HAND BOOKS - Qty", value="", key="add_handbooks_qty")
+            with col2:
+                graduate_rate = st.text_input("GRADUATE - Rate", value="", key="add_grad_rate")
+                undergraduate_rate = st.text_input("UNDER GRADUATE - Rate", value="", key="add_undergrad_rate")
+                candidates_rate = st.text_input("NO OF CANDIDATES - Rate", value="", key="add_candidates_rate")
+                exam_fee_rate = st.text_input("EXAM FEE - Rate", value="", key="add_exam_rate")
+                handbooks_rate = st.text_input("HAND BOOKS - Rate", value="", key="add_handbooks_rate")
+            
             submitted = st.form_submit_button("Save Client")
             if submitted:
                 if not name:
                     st.error("Name required")
                 else:
                     st_code = gst_state_code(gstin_input) or ""
-                    ok, err = add_client(name, gstin_input, pan, address, email="", purchase_order=purchase_order, state_code=st_code)
+                    ok, err = add_client(name, gstin_input, pan, address, email="", purchase_order=purchase_order, state_code=st_code,
+                                       graduate_qty=graduate_qty or "", graduate_rate=graduate_rate or "",
+                                       undergraduate_qty=undergraduate_qty or "", undergraduate_rate=undergraduate_rate or "",
+                                       candidates_qty=candidates_qty or "", candidates_rate=candidates_rate or "",
+                                       exam_fee_qty=exam_fee_qty or "", exam_fee_rate=exam_fee_rate or "",
+                                       handbooks_qty=handbooks_qty or "", handbooks_rate=handbooks_rate or "")
                     if ok:
                         st.success("Client saved")
                         safe_rerun()
@@ -1235,7 +1318,9 @@ def main():
         clients_list = get_clients()
         def client_label(c):
             cid, name, gstin, pan, addr, email, po, stc = c
-            stlbl = f"-{state_label_from_gst(gstin)}" if gstin else ""
+            # Use stored state_code if available, otherwise derive from GSTIN
+            state_code = stc or gst_state_code(gstin) if gstin else ""
+            stlbl = f"-{STATE_MAP.get(state_code, state_code)}" if state_code else ""
             po_part = f" | PO:{po}" if po else ""
             return f"{name} | {gstin} {stlbl}{po_part}"
         clients_map = {client_label(c): c[0] for c in clients_list}
@@ -1244,7 +1329,61 @@ def main():
             cid = clients_map[sel]
             rec = get_client_by_id(cid)
             if rec:
-                cid, name, gstin, pan, address, email, po, stc = rec
+                # Unpack all 18 values from the record
+                (cid, name, gstin, pan, address, email, po, stc,
+                 graduate_qty, graduate_rate, undergraduate_qty, undergraduate_rate,
+                 candidates_qty, candidates_rate, exam_fee_qty, exam_fee_rate,
+                 handbooks_qty, handbooks_rate) = rec
+                # Add CSS to make Delete Client button red
+                st.markdown("""
+                    <style>
+                    /* Style Delete Client button to be red */
+                    form[data-testid="stForm"] div[data-testid="column"]:last-of-type button,
+                    form[data-testid="stForm"] div[data-testid="column"]:last-of-type button[kind="secondary"] {
+                        background-color: #dc3545 !important;
+                        border-color: #dc3545 !important;
+                        color: white !important;
+                    }
+                    form[data-testid="stForm"] div[data-testid="column"]:last-of-type button:hover,
+                    form[data-testid="stForm"] div[data-testid="column"]:last-of-type button[kind="secondary"]:hover {
+                        background-color: #c82333 !important;
+                        border-color: #bd2130 !important;
+                    }
+                    </style>
+                    <script>
+                    // Force red color for Delete Client button using JavaScript
+                    function styleDeleteButton() {
+                        const forms = document.querySelectorAll('form[data-testid="stForm"]');
+                        forms.forEach(form => {
+                            const columns = form.querySelectorAll('div[data-testid="column"]');
+                            if (columns.length >= 2) {
+                                const lastColumn = columns[columns.length - 1];
+                                const button = lastColumn.querySelector('button');
+                                if (button && button.textContent.trim() === 'Delete Client') {
+                                    button.style.setProperty('background-color', '#dc3545', 'important');
+                                    button.style.setProperty('border-color', '#dc3545', 'important');
+                                    button.style.setProperty('color', 'white', 'important');
+                                    button.onmouseenter = function() {
+                                        this.style.setProperty('background-color', '#c82333', 'important');
+                                        this.style.setProperty('border-color', '#bd2130', 'important');
+                                    };
+                                    button.onmouseleave = function() {
+                                        this.style.setProperty('background-color', '#dc3545', 'important');
+                                        this.style.setProperty('border-color', '#dc3545', 'important');
+                                    };
+                                }
+                            }
+                        });
+                    }
+                    // Run immediately and on DOM changes
+                    styleDeleteButton();
+                    setTimeout(styleDeleteButton, 100);
+                    setTimeout(styleDeleteButton, 500);
+                    const observer = new MutationObserver(styleDeleteButton);
+                    observer.observe(document.body, { childList: true, subtree: true });
+                    </script>
+                """, unsafe_allow_html=True)
+                
                 with st.form("edit_client_form"):
                     name2 = st.text_input("Company Name", value=name)
                     gstin2 = st.text_input("GSTIN", value=gstin)
@@ -1252,21 +1391,50 @@ def main():
                     address2 = st.text_area("Address", value=address)
                     po2 = st.text_input("Purchase Order (optional)", value=po or "")
                     st_code_disp = st.text_input("State Code (auto)", value=stc or "", disabled=True)
+                    
+                    st.markdown("---")
+                    st.markdown("### Default Line Items (Optional)")
+                    st.caption("Set default quantities and rates that will auto-populate when creating invoices for this client")
+                    
+                    col_qty, col_rate = st.columns(2)
+                    with col_qty:
+                        graduate_qty2 = st.text_input("GRADUATE - Qty", value=graduate_qty or "", key="edit_grad_qty")
+                        undergraduate_qty2 = st.text_input("UNDER GRADUATE - Qty", value=undergraduate_qty or "", key="edit_undergrad_qty")
+                        candidates_qty2 = st.text_input("NO OF CANDIDATES - Qty", value=candidates_qty or "", key="edit_candidates_qty")
+                        exam_fee_qty2 = st.text_input("EXAM FEE - Qty", value=exam_fee_qty or "", key="edit_exam_qty")
+                        handbooks_qty2 = st.text_input("HAND BOOKS - Qty", value=handbooks_qty or "", key="edit_handbooks_qty")
+                    with col_rate:
+                        graduate_rate2 = st.text_input("GRADUATE - Rate", value=graduate_rate or "", key="edit_grad_rate")
+                        undergraduate_rate2 = st.text_input("UNDER GRADUATE - Rate", value=undergraduate_rate or "", key="edit_undergrad_rate")
+                        candidates_rate2 = st.text_input("NO OF CANDIDATES - Rate", value=candidates_rate or "", key="edit_candidates_rate")
+                        exam_fee_rate2 = st.text_input("EXAM FEE - Rate", value=exam_fee_rate or "", key="edit_exam_rate")
+                        handbooks_rate2 = st.text_input("HAND BOOKS - Rate", value=handbooks_rate or "", key="edit_handbooks_rate")
+                    
                     col1, col2 = st.columns(2)
                     with col1:
-                        if st.form_submit_button("Update Client"):
-                            if not name2:
-                                st.error("Name required")
-                            else:
-                                st_code = gst_state_code(gstin2) or stc or ""
-                                update_client(cid, name2, gstin2, pan2, address2, email or "", purchase_order=po2 or "", state_code=st_code)
-                                st.success("Updated")
-                                safe_rerun()
+                        update_clicked = st.form_submit_button("Update Client", use_container_width=True, type="primary")
                     with col2:
-                        if st.form_submit_button("Delete Client"):
-                            delete_client(cid)
-                            st.success("Deleted")
-                            safe_rerun()
+                        delete_clicked = st.form_submit_button("Delete Client", use_container_width=True, type="secondary")
+                
+                # Handle form submissions outside the form context
+                if update_clicked:
+                    if not name2:
+                        st.error("Name required")
+                    else:
+                        st_code = gst_state_code(gstin2) or stc or ""
+                        update_client(cid, name2, gstin2, pan2, address2, email or "", purchase_order=po2 or "", state_code=st_code,
+                                    graduate_qty=graduate_qty2 or "", graduate_rate=graduate_rate2 or "",
+                                    undergraduate_qty=undergraduate_qty2 or "", undergraduate_rate=undergraduate_rate2 or "",
+                                    candidates_qty=candidates_qty2 or "", candidates_rate=candidates_rate2 or "",
+                                    exam_fee_qty=exam_fee_qty2 or "", exam_fee_rate=exam_fee_rate2 or "",
+                                    handbooks_qty=handbooks_qty2 or "", handbooks_rate=handbooks_rate2 or "")
+                        st.success("Updated")
+                        safe_rerun()
+                
+                if delete_clicked:
+                    delete_client(cid)
+                    st.success("Deleted")
+                    safe_rerun()
 
     # Create Invoice
     elif mode == "Create Invoice":
@@ -1275,26 +1443,79 @@ def main():
         client_options = []
         for c in clients:
             cid, name, gstin, pan, addr, email, po, stc = c
-            stlbl = f"-{state_label_from_gst(gstin)}" if gstin else ""
+            # Use stored state_code if available, otherwise derive from GSTIN
+            state_code = stc or gst_state_code(gstin) if gstin else ""
+            stlbl = f"-{STATE_MAP.get(state_code, state_code)}" if state_code else ""
             client_options.append((f"{name} | {gstin} {stlbl}", cid))
         client_select = ["--select--"] + [lbl for lbl,_ in client_options]
         selected = st.selectbox("Select Client", options=client_select)
         client_info = None
+        current_client_id = None
         if selected != "--select--":
             cid = None
             for lbl, idv in client_options:
                 if lbl == selected:
                     cid = idv; break
             if cid:
+                current_client_id = cid
                 rec = get_client_by_id(cid)
                 if rec:
-                    cid, name, gstin, pan, address, email, purchase_order, state_code = rec
+                    # Unpack all 18 values from the record
+                    (cid, name, gstin, pan, address, email, purchase_order, state_code,
+                     graduate_qty, graduate_rate, undergraduate_qty, undergraduate_rate,
+                     candidates_qty, candidates_rate, exam_fee_qty, exam_fee_rate,
+                     handbooks_qty, handbooks_rate) = rec
                     client_info = {"id": cid, "name": name, "gstin": gstin, "pan": pan, "address": address, "purchase_order": purchase_order, "state_code": state_code}
+
+        # Track the last selected client ID and reset rows when client changes
+        if "last_selected_client_id" not in st.session_state:
+            st.session_state.last_selected_client_id = None
+        
+        # Reset rows if client has changed
+        if current_client_id is not None and st.session_state.last_selected_client_id != current_client_id:
+            # Get client record to access default values
+            rec = get_client_by_id(current_client_id)
+            if rec:
+                (cid, name, gstin, pan, address, email, purchase_order, state_code,
+                 graduate_qty, graduate_rate, undergraduate_qty, undergraduate_rate,
+                 candidates_qty, candidates_rate, exam_fee_qty, exam_fee_rate,
+                 handbooks_qty, handbooks_rate) = rec
+                
+                # Use default values from client if available, otherwise empty strings
+                st.session_state.rows = [
+                    {"slno":1, "particulars":"GRADUATE", "description":"Commercial Training and Coaching Services", "sac_code":"999293", 
+                     "qty":graduate_qty or "", "rate":graduate_rate or ""},
+                    {"slno":2, "particulars":"UNDER GRADUATE", "description":"Commercial Training and Coaching Services", "sac_code":"999293", 
+                     "qty":undergraduate_qty or "", "rate":undergraduate_rate or ""},
+                    {"slno":3, "particulars":"NO OF CANDIDATES", "description":"Commercial Training and Coaching Services", "sac_code":"999293", 
+                     "qty":candidates_qty or "", "rate":candidates_rate or ""},
+                    {"slno":4, "particulars":"EXAM FEE", "description":"Commercial Training and Coaching Services", "sac_code":"999293", 
+                     "qty":exam_fee_qty or "", "rate":exam_fee_rate or ""},
+                    {"slno":5, "particulars":"HAND BOOKS", "description":"Commercial Training and Coaching Services", "sac_code":"999293", 
+                     "qty":handbooks_qty or "", "rate":handbooks_rate or ""}
+                ]
+            else:
+                # Fallback to empty values if client not found
+                st.session_state.rows = [
+                    {"slno":1, "particulars":"GRADUATE", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""},
+                    {"slno":2, "particulars":"UNDER GRADUATE", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""},
+                    {"slno":3, "particulars":"NO OF CANDIDATES", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""},
+                    {"slno":4, "particulars":"EXAM FEE", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""},
+                    {"slno":5, "particulars":"HAND BOOKS", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""}
+                ]
+            # Also clear supporting dataframe when client changes
+            if "supporting_df" in st.session_state:
+                st.session_state.supporting_df = None
+            st.session_state.last_selected_client_id = current_client_id
+            safe_rerun()  # Force rerun to update the UI with reset values
+        elif current_client_id is None:
+            st.session_state.last_selected_client_id = None
 
         col1, col2 = st.columns(2)
         with col1:
             invoice_no = st.text_input("Invoice No", value="")
             invoice_date = st.date_input("Invoice Date", value=date.today())
+            purchase_order = st.text_input("Purchase Order (optional)", value=client_info.get('purchase_order', '') if client_info else "")
         with col2:
             payment_mode = st.selectbox("Payment Mode", ["Bank","UPI","Cash"])
             training_exam_dates = st.text_input("Training/Exam Dates (optional)")
@@ -1303,37 +1524,321 @@ def main():
         st.subheader("Line Items (default items pre-populated)")
         if "rows" not in st.session_state:
             st.session_state.rows = [
-                {"slno":1, "particulars":"DEGREE", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""},
+                {"slno":1, "particulars":"GRADUATE", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""},
                 {"slno":2, "particulars":"UNDER GRADUATE", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""},
                 {"slno":3, "particulars":"NO OF CANDIDATES", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""},
                 {"slno":4, "particulars":"EXAM FEE", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""},
                 {"slno":5, "particulars":"HAND BOOKS", "description":"Commercial Training and Coaching Services", "sac_code":"999293", "qty":"", "rate":""}
             ]
 
-        if st.button("Add New Blank Row"):
-            st.session_state.rows.append({"slno": len(st.session_state.rows)+1, "particulars":"", "description":"", "sac_code":"", "qty":"", "rate":""})
-            safe_rerun()
-
+        # Add CSS for table borders with perfectly aligned column lines
+        st.markdown(
+            """
+            <style>
+            .table-wrapper {
+                border: 2px solid #4a90e2;
+                border-radius: 4px;
+                overflow: hidden;
+                margin-bottom: 10px;
+            }
+            /* Remove ALL gaps between Streamlit columns */
+            .table-wrapper div[data-testid="column"] {
+                padding: 0 !important;
+                margin: 0 !important;
+                gap: 0 !important;
+            }
+            /* Remove gaps in the row container */
+            .table-wrapper > div[data-testid="column-container"],
+            .table-wrapper [data-testid="column-container"],
+            .table-wrapper .row-widget.stHorizontal {
+                gap: 0 !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            /* Remove Streamlit's default column spacing */
+            .table-wrapper [class*="stHorizontal"] {
+                gap: 0 !important;
+            }
+            /* Header row styling */
+            .table-header-row {
+                background: #f0f7ff;
+                border-top: 2px solid #4a90e2;
+                border-bottom: 2px solid #4a90e2;
+                position: relative;
+            }
+            /* Apply column borders to header row - must be visible */
+            .table-header-row div[data-testid="column"]:not(:last-child) {
+                border-right: 1px solid #4a90e2 !important;
+                position: relative;
+            }
+            .table-header-cell {
+                padding: 10px 8px;
+                font-weight: 600;
+                color: #2c3e50;
+                text-align: center;
+            }
+            /* Data row styling */
+            .table-data-row {
+                border-left: 2px solid #4a90e2;
+                border-right: 2px solid #4a90e2;
+                border-bottom: 1px solid #4a90e2;
+                margin: 0 !important;
+                padding: 0 !important;
+                line-height: 0.8 !important;
+                position: relative;
+            }
+            /* Apply column borders to data rows - must be visible */
+            .table-data-row div[data-testid="column"]:not(:last-child) {
+                border-right: 1px solid #4a90e2 !important;
+                position: relative;
+            }
+            .table-data-row:last-child {
+                border-bottom: 2px solid #4a90e2;
+            }
+            /* Use pseudo-elements to extend column borders to touch top and bottom row borders */
+            .table-header-row div[data-testid="column"]:not(:last-child)::after {
+                content: '';
+                position: absolute;
+                top: -2px;
+                right: -1px;
+                bottom: 0;
+                width: 1px;
+                background-color: #4a90e2;
+                z-index: 100;
+                pointer-events: none;
+            }
+            .table-data-row div[data-testid="column"]:not(:last-child)::after {
+                content: '';
+                position: absolute;
+                top: 0;
+                right: -1px;
+                bottom: 0;
+                width: 1px;
+                background-color: #4a90e2;
+                z-index: 100;
+                pointer-events: none;
+            }
+            /* For last data row, extend border to bottom */
+            .table-data-row:last-child div[data-testid="column"]:not(:last-child)::after {
+                bottom: -2px;
+            }
+            /* Also ensure border-right is visible on all columns with maximum specificity */
+            .table-wrapper .table-header-row div[data-testid="column"]:not(:last-child),
+            .table-wrapper .table-data-row div[data-testid="column"]:not(:last-child),
+            .table-wrapper div[data-testid="column-container"] div[data-testid="column"]:not(:last-child) {
+                border-right: 1px solid #4a90e2 !important;
+                border-right-width: 1px !important;
+                border-right-style: solid !important;
+                border-right-color: #4a90e2 !important;
+            }
+            /* Force column borders to be visible - override any Streamlit defaults */
+            .table-wrapper div[data-testid="column"]:not(:last-child) {
+                border-right: 1px solid #4a90e2 !important;
+            }
+            .table-data-cell {
+                padding: 0px 2px !important;
+                min-height: 25px !important;
+                position: relative;
+            }
+            /* Remove ALL spacing between row containers */
+            .table-wrapper > div[data-testid="column-container"] {
+                margin-bottom: 0 !important;
+                padding-bottom: 0 !important;
+                margin-top: 0 !important;
+                padding-top: 0 !important;
+            }
+            /* Reduce spacing in Streamlit elements */
+            .table-data-row .element-container {
+                margin-bottom: 0 !important;
+                padding-bottom: 0 !important;
+                margin-top: 0 !important;
+                padding-top: 0 !important;
+            }
+            .table-data-row .stTextInput,
+            .table-data-row .stNumberInput {
+                margin-bottom: 0 !important;
+                margin-top: 0 !important;
+            }
+            .table-data-row .stTextInput > div,
+            .table-data-row .stNumberInput > div {
+                margin-bottom: 0 !important;
+                margin-top: 0 !important;
+                padding-bottom: 0 !important;
+                padding-top: 0 !important;
+            }
+            /* Remove spacing from markdown elements */
+            .table-data-row .stMarkdown {
+                margin-bottom: 0 !important;
+                margin-top: 0 !important;
+                padding-bottom: 0 !important;
+                padding-top: 0 !important;
+            }
+            /* Remove any gap between rows */
+            .table-data-row + .table-data-row {
+                margin-top: 0 !important;
+            }
+            /* Aggressively remove all spacing from nested elements in rows */
+            .table-data-row * {
+                margin-top: 0 !important;
+                margin-bottom: 0 !important;
+                padding-top: 0 !important;
+                padding-bottom: 0 !important;
+            }
+            /* Reduce input field heights and padding */
+            .table-data-row .stTextInput > div > div > input,
+            .table-data-row .stNumberInput > div > div > input {
+                padding: 2px 4px !important;
+                line-height: 1.2 !important;
+                min-height: 24px !important;
+            }
+            /* Reduce spacing in all Streamlit widgets within rows */
+            .table-data-row [class*="stTextInput"],
+            .table-data-row [class*="stNumberInput"],
+            .table-data-row [class*="stMarkdown"] {
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            /* Remove any gap between consecutive row containers */
+            .table-wrapper > div[data-testid="column-container"] + div[data-testid="column-container"] {
+                margin-top: -1px !important;
+            }
+            /* Label styling for Qty and Rate - positioned absolutely above input */
+            .table-data-cell-label {
+                position: absolute;
+                top: 2px;
+                left: 4px;
+                font-size: 11px;
+                font-weight: 500;
+                color: #2c3e50;
+                z-index: 2;
+                line-height: 1.2;
+                pointer-events: none;
+            }
+            /* Ensure inputs stay in same position - no padding added */
+            .table-data-cell-with-label .stTextInput > div > div > input {
+                position: relative;
+                z-index: 1;
+            }
+            /* Ensure taxable text doesn't interfere with label */
+            .table-data-cell-with-label .stMarkdown {
+                margin-top: 0 !important;
+                margin-bottom: 0 !important;
+                padding-top: 16px !important;
+            }
+            /* Ensure proper spacing and alignment */
+            .stNumberInput > div > div > input,
+            .stTextInput > div > div > input {
+                border: none !important;
+                box-shadow: none !important;
+                padding: 2px 4px !important;
+                line-height: 1.2 !important;
+            }
+            /* Force exact width matching */
+            .table-wrapper div[data-testid="column"] {
+                box-sizing: border-box !important;
+            }
+            /* Remove any default Streamlit spacing */
+            .table-wrapper .element-container {
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            /* Remove spacing from markdown containers that wrap rows */
+            .table-wrapper div[data-testid="stMarkdownContainer"] {
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            </style>
+            <script>
+            // Force column borders to appear using JavaScript
+            function addColumnBorders() {
+                const wrapper = document.querySelector('.table-wrapper');
+                if (wrapper) {
+                    const columns = wrapper.querySelectorAll('div[data-testid="column"]:not(:last-child)');
+                    columns.forEach(col => {
+                        col.style.setProperty('border-right', '1px solid #4a90e2', 'important');
+                        col.style.setProperty('border-right-width', '1px', 'important');
+                        col.style.setProperty('border-right-style', 'solid', 'important');
+                        col.style.setProperty('border-right-color', '#4a90e2', 'important');
+                    });
+                }
+            }
+            // Run immediately and on DOM changes
+            addColumnBorders();
+            setTimeout(addColumnBorders, 100);
+            setTimeout(addColumnBorders, 500);
+            const observer = new MutationObserver(addColumnBorders);
+            observer.observe(document.body, { childList: true, subtree: true });
+            </script>
+            """,
+            unsafe_allow_html=True,
+        )
+        
+        # Display table with borders - Header using Streamlit columns for perfect alignment
+        st.markdown('<div class="table-wrapper">', unsafe_allow_html=True)
+        st.markdown('<div class="table-header-row">', unsafe_allow_html=True)
+        
+        # Use the same column proportions as data rows
+        h1, h2, h3, h4, h5, h6, h7 = st.columns([0.8, 2.5, 3.5, 1.2, 1.0, 1.0, 1.5])
+        
+        with h1:
+            st.markdown('<div class="table-header-cell">S.No</div>', unsafe_allow_html=True)
+        with h2:
+            st.markdown('<div class="table-header-cell" style="text-align:left;">Particulars</div>', unsafe_allow_html=True)
+        with h3:
+            st.markdown('<div class="table-header-cell" style="text-align:left;">Description</div>', unsafe_allow_html=True)
+        with h4:
+            st.markdown('<div class="table-header-cell">SAC</div>', unsafe_allow_html=True)
+        with h5:
+            st.markdown('<div class="table-header-cell">Qty</div>', unsafe_allow_html=True)
+        with h6:
+            st.markdown('<div class="table-header-cell">Rate</div>', unsafe_allow_html=True)
+        with h7:
+            st.markdown('<div class="table-header-cell">Taxable</div>', unsafe_allow_html=True)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+        
+        # Get client ID for unique keys (use 0 if no client selected)
+        client_key = current_client_id if current_client_id is not None else 0
+        
         for idx in range(len(st.session_state.rows)):
             r = st.session_state.rows[idx]
-            # Render a visible card-like row with columns (no expander)
-            st.markdown(
-                f"""
-                <div style="border:1px solid #e9ecef;border-radius:8px;padding:12px;margin-bottom:12px;background:#ffffff;">
-                    <div style="font-weight:600;margin-bottom:8px;">Row {r.get('slno', idx+1)}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            # Use a container so the inputs look grouped; columns match the desired row/column layout
-            with st.container():
-                c1, c2, c3, c4, c5, c6, c7 = st.columns([1.0, 3.0, 4.0, 1.2, 1.0, 1.0, 1.0])
-                new_sl = c1.number_input("S.No", value=int(r.get('slno', idx+1)), min_value=1, step=1, key=f"sl_{idx}")
-                new_part = c2.text_input("Particulars", value=r.get('particulars', ''), key=f"part_{idx}")
-                new_desc = c3.text_input("Description", value=r.get('description', ''), key=f"desc_{idx}")
-                new_sac = c4.text_input("SAC", value=r.get('sac_code', ''), key=f"sac_{idx}")
-                new_qty = c5.text_input("Qty", value=str(r.get('qty', '')), key=f"qty_{idx}")
-                new_rate = c6.text_input("Rate", value=str(r.get('rate', '')), key=f"rate_{idx}")
+            # Create a row container
+            st.markdown('<div class="table-data-row">', unsafe_allow_html=True)
+            
+            # Use columns for the inputs
+            c1, c2, c3, c4, c5, c6, c7 = st.columns([0.8, 2.5, 3.5, 1.2, 1.0, 1.0, 1.5])
+            
+            with c1:
+                st.markdown('<div class="table-data-cell">', unsafe_allow_html=True)
+                new_sl = st.number_input("S.No", value=int(r.get('slno', idx+1)), min_value=1, step=1, key=f"sl_{client_key}_{idx}", label_visibility="collapsed")
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            with c2:
+                st.markdown('<div class="table-data-cell">', unsafe_allow_html=True)
+                new_part = st.text_input("Particulars", value=r.get('particulars', ''), key=f"part_{client_key}_{idx}", label_visibility="collapsed")
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            with c3:
+                st.markdown('<div class="table-data-cell">', unsafe_allow_html=True)
+                new_desc = st.text_input("Description", value=r.get('description', ''), key=f"desc_{client_key}_{idx}", label_visibility="collapsed")
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            with c4:
+                st.markdown('<div class="table-data-cell">', unsafe_allow_html=True)
+                new_sac = st.text_input("SAC", value=r.get('sac_code', ''), key=f"sac_{client_key}_{idx}", label_visibility="collapsed")
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            with c5:
+                st.markdown('<div class="table-data-cell table-data-cell-with-label"><div class="table-data-cell-label">Qty</div>', unsafe_allow_html=True)
+                new_qty = st.text_input("Qty", value=str(r.get('qty', '')), key=f"qty_{client_key}_{idx}", label_visibility="collapsed")
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            with c6:
+                st.markdown('<div class="table-data-cell table-data-cell-with-label"><div class="table-data-cell-label">Rate</div>', unsafe_allow_html=True)
+                new_rate = st.text_input("Rate", value=str(r.get('rate', '')), key=f"rate_{client_key}_{idx}", label_visibility="collapsed")
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            with c7:
                 try:
                     qv = float(new_qty.replace(",", "")) if (new_qty and str(new_qty).strip() != "") else None
                 except:
@@ -1343,64 +1848,65 @@ def main():
                 except:
                     rv = None
                 taxable_val = (qv * rv) if (qv is not None and rv is not None) else None
-                # Show taxable amount or placeholder
-                c7.write(f"Taxable: Rs. {taxable_val:,.2f}" if taxable_val is not None else "Taxable: -")
-                # Persist updates back to session_state
-                st.session_state.rows[idx].update({
-                    "slno": new_sl,
-                    "particulars": new_part,
-                    "description": new_desc,
-                    "sac_code": new_sac,
-                    "qty": new_qty,
-                    "rate": new_rate,
-                })
-                # Action buttons in a single, compact row under the inputs
-                btn_col1, btn_col2, btn_col3, btn_col4 = st.columns([1, 1, 1, 1])
-                with btn_col1:
-                    if st.button("Remove", key=f"remove_{idx}"):
-                        st.session_state.rows.pop(idx)
-                        # reindex serial numbers
-                        for i, rr in enumerate(st.session_state.rows, start=1):
-                            rr['slno'] = i
-                        safe_rerun()
-                with btn_col2:
-                    if st.button("Duplicate", key=f"dup_{idx}"):
-                        dup = st.session_state.rows[idx].copy()
-                        st.session_state.rows.insert(idx + 1, dup)
-                        for i, rr in enumerate(st.session_state.rows, start=1):
-                            rr['slno'] = i
-                        safe_rerun()
-                with btn_col3:
-                    if st.button("Move Up", key=f"up_{idx}") and idx > 0:
-                        st.session_state.rows[idx - 1], st.session_state.rows[idx] = st.session_state.rows[idx], st.session_state.rows[idx - 1]
-                        for i, rr in enumerate(st.session_state.rows, start=1):
-                            rr['slno'] = i
-                        safe_rerun()
-                with btn_col4:
-                    if st.button("Move Down", key=f"down_{idx}") and idx < len(st.session_state.rows) - 1:
-                        st.session_state.rows[idx + 1], st.session_state.rows[idx] = st.session_state.rows[idx], st.session_state.rows[idx + 1]
-                        for i, rr in enumerate(st.session_state.rows, start=1):
-                            rr['slno'] = i
-                        safe_rerun()
+                st.markdown('<div class="table-data-cell table-data-cell-with-label"><div class="table-data-cell-label">Taxable</div>', unsafe_allow_html=True)
+                st.write(f"**Rs. {taxable_val:,.2f}**" if taxable_val is not None else "**-**")
+                st.markdown('</div>', unsafe_allow_html=True)
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Persist updates back to session_state
+            st.session_state.rows[idx].update({
+                "slno": new_sl,
+                "particulars": new_part,
+                "description": new_desc,
+                "sac_code": new_sac,
+                "qty": new_qty,
+                "rate": new_rate,
+            })
+        
+        st.markdown('</div>', unsafe_allow_html=True)
 
         if st.button("Add New Row (Bottom)"):
             st.session_state.rows.append({"slno": len(st.session_state.rows)+1, "particulars":"", "description":"", "sac_code":"", "qty":"", "rate":""})
             safe_rerun()
 
+        # Add CSS to make checkbox bold and visible
+        st.markdown(
+            """
+            <style>
+            /* Make Force IGST checkbox bold and visible */
+            div[data-testid="stCheckbox"] label {
+                font-weight: 700 !important;
+                font-size: 20px !important;
+                color: #1f2937 !important;
+            }
+            div[data-testid="stCheckbox"] label p {
+                font-weight: 700 !important;
+                font-size: 20px !important;
+                color: #1f2937 !important;
+                margin: 0 !important;
+            }
+            div[data-testid="stCheckbox"] {
+                margin-bottom: 8px !important;
+            }
+            /* Increase checkbox box size */
+            div[data-testid="stCheckbox"] input[type="checkbox"] {
+                width: 24px !important;
+                height: 24px !important;
+                min-width: 24px !important;
+                min-height: 24px !important;
+                margin-right: 12px !important;
+            }
+            div[data-testid="stCheckbox"] label {
+                padding: 8px 0 !important;
+                line-height: 1.5 !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
         force_igst = st.checkbox("Force IGST manually", value=False)
         advance_received = st.number_input("Advance Received (if any)", min_value=0.0, value=0.0)
-
-        uploaded_file = st.file_uploader("Upload Supporting Excel (.xlsx/.csv)", type=["xlsx","csv"])
-        supporting_df = None
-        if uploaded_file:
-            try:
-                if uploaded_file.name.lower().endswith(".csv"):
-                    supporting_df = pd.read_csv(uploaded_file)
-                else:
-                    supporting_df = pd.read_excel(uploaded_file)
-                st.dataframe(supporting_df.head())
-            except Exception as e:
-                st.error(f"Error reading file: {e}")
 
         subtotal_calc = 0.0
         for r in st.session_state.rows:
@@ -1416,10 +1922,18 @@ def main():
                 subtotal_calc += (qv * rv)
 
         # Render on-screen preview that resembles the invoice layout
+        # Update client_info with purchase_order from form if provided
+        if client_info:
+            client_info_copy = client_info.copy()
+            if purchase_order:
+                client_info_copy['purchase_order'] = purchase_order
+        else:
+            client_info_copy = {}
+        
         preview_meta = {
             "invoice_no": invoice_no, 
             "invoice_date": invoice_date.strftime("%d-%m-%Y"), 
-            "client": client_info,
+            "client": client_info_copy,
             "training_exam_dates": training_exam_dates,
             "process_name": process_name
         }
@@ -1432,17 +1946,67 @@ def main():
 
         st.metric("Subtotal", f"Rs. {subtotal_calc:,.2f}")
 
-        if st.button("Generate PDF Invoice"):
+        # Initialize supporting_df variable
+        if "supporting_df" not in st.session_state:
+            st.session_state.supporting_df = None
+
+        uploaded_file = st.file_uploader("Upload Supporting Excel (.xlsx/.csv)", type=["xlsx","csv"])
+        if uploaded_file:
+            try:
+                if uploaded_file.name.lower().endswith(".csv"):
+                    st.session_state.supporting_df = pd.read_csv(uploaded_file)
+                else:
+                    st.session_state.supporting_df = pd.read_excel(uploaded_file)
+                st.dataframe(st.session_state.supporting_df.head())
+            except Exception as e:
+                st.error(f"Error reading file: {e}")
+                st.session_state.supporting_df = None
+        else:
+            st.session_state.supporting_df = None
+
+        # Add CSS to make Generate PDF button more visible
+        st.markdown(
+            """
+            <style>
+            /* Make Generate PDF button bold and visible */
+            div[data-testid="stButton"] > button[kind="primary"] {
+                font-weight: 700 !important;
+                font-size: 18px !important;
+                padding: 12px 24px !important;
+                background-color: #1f77b4 !important;
+                border: 2px solid #0d5a8a !important;
+                border-radius: 6px !important;
+                width: 100% !important;
+                height: 50px !important;
+            }
+            div[data-testid="stButton"] > button[kind="primary"]:hover {
+                background-color: #0d5a8a !important;
+                border-color: #0a4a6f !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        if st.button("Generate PDF Invoice", type="primary"):
             if not client_info:
                 st.error("Select a client first.")
             else:
                 if not str(invoice_no).strip():
                     st.error("Enter Invoice No.")
                 else:
+                    # Update client_info with purchase_order from form if provided
+                    if client_info:
+                        client_info_for_pdf = client_info.copy()
+                        if purchase_order:
+                            client_info_for_pdf['purchase_order'] = purchase_order
+                    else:
+                        client_info_for_pdf = {}
+                    
                     meta = {
                         "invoice_no": invoice_no,
                         "invoice_date": invoice_date.strftime("%d-%m-%Y"),
-                        "client": client_info,
+                        "client": client_info_for_pdf,
                         "use_igst": force_igst,
                         "advance_received": float(advance_received),
                         # include training/exam dates entered in the UI so PDF generator can render them
@@ -1450,7 +2014,7 @@ def main():
                         "process_name": process_name
                     }
                     try:
-                        pdf_path = generate_invoice_pdf(meta, st.session_state.rows, supporting_df)
+                        pdf_path = generate_invoice_pdf(meta, st.session_state.rows, st.session_state.supporting_df)
                         subtotal_dec = subtotal_calc
                         comp_state = gst_state_code(COMPANY.get('gstin',''))
                         cli_state = gst_state_code(client_info.get('gstin',''))

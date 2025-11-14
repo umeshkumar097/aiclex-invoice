@@ -3,11 +3,14 @@
 # Built by Aiclex Technologies
 #
 # Requirements:
-# pip install streamlit pandas reportlab num2words openpyxl requests
+# pip install streamlit pandas reportlab num2words openpyxl requests mysql-connector-python
 # testing
 import streamlit as st
-import sqlite3
 from datetime import date, datetime, timedelta
+from db import (
+    get_connection, get_db_connection, execute_query, 
+    fetch_all, fetch_one, safe_commit, init_db, migrate_db_add_columns
+)
 import pandas as pd
 import os
 import traceback
@@ -31,7 +34,6 @@ from reportlab.pdfbase.ttfonts import TTFont
 # ---------------- Constants ----------------
 APP_TITLE = "Crux Invoice Management System"
 APP_BUILT_BY = "Built by Aiclex Technologies"
-DB_PATH = "invoices.db"
 PDF_DIR = "generated_pdfs"
 ASSETS_DIR = "assets"
 os.makedirs(PDF_DIR, exist_ok=True)
@@ -117,137 +119,112 @@ def state_label_from_gst(gstin):
     return STATE_MAP.get(sc, sc) if sc else ""
 
 def safe_rerun():
-    if hasattr(st, "experimental_rerun"):
+    """Safely rerun Streamlit app - updated to use st.rerun()"""
+    try:
+        st.rerun()
+    except Exception:
         try:
-            st.experimental_rerun()
+            # Fallback for older Streamlit versions
+            if hasattr(st, "experimental_rerun"):
+                st.experimental_rerun()
         except Exception:
             pass
 
-# DB init & migrate
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS clients (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT,
-            gstin TEXT UNIQUE,
-            pan TEXT,
-            address TEXT,
-            email TEXT,
-            purchase_order TEXT,
-            state_code TEXT
-        )
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS invoices (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            invoice_no TEXT,
-            invoice_date TEXT,
-            client_id INTEGER,
-            subtotal REAL,
-            sgst REAL,
-            cgst REAL,
-            igst REAL,
-            total REAL,
-            pdf_path TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+# DB helpers - Updated to use MySQL with connection pooling
+# Note: init_db() and migrate_db_add_columns() are now in db.py
 
-def migrate_db_add_columns():
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("PRAGMA table_info(clients)")
-    cols = [r[1] for r in cur.fetchall()]
-    if "purchase_order" not in cols:
-        try:
-            cur.execute("ALTER TABLE clients ADD COLUMN purchase_order TEXT")
-        except:
-            pass
-    if "state_code" not in cols:
-        try:
-            cur.execute("ALTER TABLE clients ADD COLUMN state_code TEXT")
-        except:
-            pass
-    # Add default line item columns
-    default_item_cols = [
-        "graduate_qty", "graduate_rate",
-        "undergraduate_qty", "undergraduate_rate",
-        "candidates_qty", "candidates_rate",
-        "exam_fee_qty", "exam_fee_rate",
-        "handbooks_qty", "handbooks_rate"
-    ]
-    for col in default_item_cols:
-        if col not in cols:
-            try:
-                cur.execute(f"ALTER TABLE clients ADD COLUMN {col} TEXT")
-            except:
-                pass
-    conn.commit()
-    conn.close()
-
-# DB helpers
 def get_clients():
-    conn = sqlite3.connect(DB_PATH)
-    rows = conn.execute("SELECT id,name,gstin,pan,address,email,purchase_order,state_code FROM clients ORDER BY name").fetchall()
-    conn.close()
-    return rows
+    """Get all clients - always fetches fresh data"""
+    query = """
+        SELECT id, name, gstin, pan, address, email, purchase_order, state_code 
+        FROM clients 
+        ORDER BY name
+    """
+    return fetch_all(query)
 
 def get_client_by_id(cid):
-    conn = sqlite3.connect(DB_PATH)
-    row = conn.execute("""SELECT id,name,gstin,pan,address,email,purchase_order,state_code,
-                         graduate_qty,graduate_rate,undergraduate_qty,undergraduate_rate,
-                         candidates_qty,candidates_rate,exam_fee_qty,exam_fee_rate,
-                         handbooks_qty,handbooks_rate FROM clients WHERE id=?""", (cid,)).fetchone()
-    conn.close()
-    return row
+    """Get client by ID - always fetches fresh data"""
+    query = """
+        SELECT id, name, gstin, pan, address, email, purchase_order, state_code,
+               graduate_qty, graduate_rate, undergraduate_qty, undergraduate_rate,
+               candidates_qty, candidates_rate, exam_fee_qty, exam_fee_rate,
+               handbooks_qty, handbooks_rate 
+        FROM clients 
+        WHERE id = %s
+    """
+    return fetch_one(query, (cid,))
 
 def add_client(name, gstin, pan, address, email="", purchase_order="", state_code="",
                graduate_qty="", graduate_rate="", undergraduate_qty="", undergraduate_rate="",
                candidates_qty="", candidates_rate="", exam_fee_qty="", exam_fee_rate="",
                handbooks_qty="", handbooks_rate=""):
-    conn = sqlite3.connect(DB_PATH)
+    """Add or update client (INSERT ... ON DUPLICATE KEY UPDATE)"""
+    query = """
+        INSERT INTO clients 
+        (name, gstin, pan, address, email, purchase_order, state_code,
+         graduate_qty, graduate_rate, undergraduate_qty, undergraduate_rate,
+         candidates_qty, candidates_rate, exam_fee_qty, exam_fee_rate,
+         handbooks_qty, handbooks_rate) 
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+        name = VALUES(name),
+        pan = VALUES(pan),
+        address = VALUES(address),
+        email = VALUES(email),
+        purchase_order = VALUES(purchase_order),
+        state_code = VALUES(state_code),
+        graduate_qty = VALUES(graduate_qty),
+        graduate_rate = VALUES(graduate_rate),
+        undergraduate_qty = VALUES(undergraduate_qty),
+        undergraduate_rate = VALUES(undergraduate_rate),
+        candidates_qty = VALUES(candidates_qty),
+        candidates_rate = VALUES(candidates_rate),
+        exam_fee_qty = VALUES(exam_fee_qty),
+        exam_fee_rate = VALUES(exam_fee_rate),
+        handbooks_qty = VALUES(handbooks_qty),
+        handbooks_rate = VALUES(handbooks_rate)
+    """
+    params = (name, gstin, pan, address, email, purchase_order, state_code,
+              graduate_qty, graduate_rate, undergraduate_qty, undergraduate_rate,
+              candidates_qty, candidates_rate, exam_fee_qty, exam_fee_rate,
+              handbooks_qty, handbooks_rate)
     try:
-        conn.execute("""INSERT OR REPLACE INTO clients 
-                        (name,gstin,pan,address,email,purchase_order,state_code,
-                         graduate_qty,graduate_rate,undergraduate_qty,undergraduate_rate,
-                         candidates_qty,candidates_rate,exam_fee_qty,exam_fee_rate,
-                         handbooks_qty,handbooks_rate) 
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                     (name,gstin,pan,address,email,purchase_order,state_code,
-                      graduate_qty,graduate_rate,undergraduate_qty,undergraduate_rate,
-                      candidates_qty,candidates_rate,exam_fee_qty,exam_fee_rate,
-                      handbooks_qty,handbooks_rate))
-        conn.commit()
+        execute_query(query, params, commit=True)
         return True, None
     except Exception as e:
         return False, str(e)
-    finally:
-        conn.close()
 
 def update_client(cid, name, gstin, pan, address, email="", purchase_order="", state_code="",
                  graduate_qty="", graduate_rate="", undergraduate_qty="", undergraduate_rate="",
                  candidates_qty="", candidates_rate="", exam_fee_qty="", exam_fee_rate="",
                  handbooks_qty="", handbooks_rate=""):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("""UPDATE clients SET name=?,gstin=?,pan=?,address=?,email=?,purchase_order=?,state_code=?,
-                    graduate_qty=?,graduate_rate=?,undergraduate_qty=?,undergraduate_rate=?,
-                    candidates_qty=?,candidates_rate=?,exam_fee_qty=?,exam_fee_rate=?,
-                    handbooks_qty=?,handbooks_rate=? WHERE id=?""",
-                 (name,gstin,pan,address,email,purchase_order,state_code,
-                  graduate_qty,graduate_rate,undergraduate_qty,undergraduate_rate,
-                  candidates_qty,candidates_rate,exam_fee_qty,exam_fee_rate,
-                  handbooks_qty,handbooks_rate,cid))
-    conn.commit()
-    conn.close()
+    """Update client information"""
+    query = """
+        UPDATE clients 
+        SET name = %s, gstin = %s, pan = %s, address = %s, email = %s, 
+            purchase_order = %s, state_code = %s,
+            graduate_qty = %s, graduate_rate = %s, undergraduate_qty = %s, 
+            undergraduate_rate = %s, candidates_qty = %s, candidates_rate = %s,
+            exam_fee_qty = %s, exam_fee_rate = %s, handbooks_qty = %s, 
+            handbooks_rate = %s 
+        WHERE id = %s
+    """
+    params = (name, gstin, pan, address, email, purchase_order, state_code,
+              graduate_qty, graduate_rate, undergraduate_qty, undergraduate_rate,
+              candidates_qty, candidates_rate, exam_fee_qty, exam_fee_rate,
+              handbooks_qty, handbooks_rate, cid)
+    try:
+        execute_query(query, params, commit=True)
+    except Exception as e:
+        st.error(f"Error updating client: {e}")
 
 def delete_client(cid):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("DELETE FROM clients WHERE id=?", (cid,))
-    conn.commit()
-    conn.close()
+    """Delete client by ID"""
+    query = "DELETE FROM clients WHERE id = %s"
+    try:
+        execute_query(query, (cid,), commit=True)
+    except Exception as e:
+        st.error(f"Error deleting client: {e}")
 
 
 def render_invoice_preview(meta, rows, subtotal, force_igst=False, advance_received=0.0):
@@ -2030,12 +2007,15 @@ def main():
                             cgst_val = subtotal_dec * 0.09
                             igst_val = 0.0
                         total_val = subtotal_dec + sgst_val + cgst_val + igst_val - float(advance_received)
-                        conn = sqlite3.connect(DB_PATH)
-                        cur = conn.cursor()
-                        cur.execute("INSERT INTO invoices (invoice_no, invoice_date, client_id, subtotal, sgst, cgst, igst, total, pdf_path) VALUES (?,?,?,?,?,?,?,?,?)",
-                                    (meta['invoice_no'], invoice_date.strftime("%Y-%m-%d"), client_info['id'], subtotal_dec, sgst_val, cgst_val, igst_val, total_val, pdf_path))
-                        conn.commit()
-                        conn.close()
+                        # Save invoice to MySQL database
+                        query = """
+                            INSERT INTO invoices 
+                            (invoice_no, invoice_date, client_id, subtotal, sgst, cgst, igst, total, pdf_path) 
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """
+                        params = (meta['invoice_no'], invoice_date.strftime("%Y-%m-%d"), client_info['id'], 
+                                 subtotal_dec, sgst_val, cgst_val, igst_val, total_val, pdf_path)
+                        execute_query(query, params, commit=True)
                         st.success(f"PDF generated: {pdf_path}")
                         with open(pdf_path, "rb") as f:
                             st.download_button("Download PDF", f, file_name=os.path.basename(pdf_path), mime="application/pdf")
@@ -2046,7 +2026,6 @@ def main():
     # History
     else:
         st.header("Invoice History")
-        conn = sqlite3.connect(DB_PATH)
         col1, col2, col3 = st.columns([1,1,1])
         with col1:
             start_date = st.date_input("From", value=date.today() - timedelta(days=30))
@@ -2054,16 +2033,31 @@ def main():
             end_date = st.date_input("To", value=date.today())
         with col3:
             refresh = st.button("Refresh")
-        q = """
-            SELECT inv.id, inv.invoice_no, inv.invoice_date, c.name AS client_name, c.gstin AS client_gstin, c.purchase_order,
-                   inv.subtotal, inv.sgst, inv.cgst, inv.igst, inv.total, inv.pdf_path
-            FROM invoices inv
-            LEFT JOIN clients c ON inv.client_id = c.id
-            WHERE invoice_date BETWEEN ? AND ?
-            ORDER BY inv.id DESC
-        """
-        dfhist = pd.read_sql_query(q, conn, params=(start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")))
-        conn.close()
+        
+        try:
+            query = """
+                SELECT inv.id, inv.invoice_no, inv.invoice_date, c.name AS client_name, 
+                       c.gstin AS client_gstin, c.purchase_order,
+                       inv.subtotal, inv.sgst, inv.cgst, inv.igst, inv.total, inv.pdf_path
+                FROM invoices inv
+                LEFT JOIN clients c ON inv.client_id = c.id
+                WHERE inv.invoice_date BETWEEN %s AND %s
+                ORDER BY inv.id DESC
+            """
+            rows = fetch_all(query, (start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")))
+            # Convert to DataFrame
+            if rows:
+                dfhist = pd.DataFrame(rows, columns=[
+                    'id', 'invoice_no', 'invoice_date', 'client_name', 
+                    'client_gstin', 'purchase_order',
+                    'subtotal', 'sgst', 'cgst', 'igst', 'total', 'pdf_path'
+                ])
+            else:
+                dfhist = pd.DataFrame()
+        except Exception as e:
+            st.error(f"Error fetching invoice history: {e}")
+            dfhist = pd.DataFrame()
+        
         if dfhist.empty:
             st.info("No invoices in selected date range.")
         else:

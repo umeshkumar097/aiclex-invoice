@@ -3,3 +3,4 @@
 generated_pdfs/
 
 invoices.db
+   __pycache__/

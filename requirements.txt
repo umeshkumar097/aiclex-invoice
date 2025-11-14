@@ -4,3 +4,4 @@ reportlab
 num2words
 openpyxl
 python-dotenv
+mysql-connector-python>=8.0.33

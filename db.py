@@ -10,7 +10,7 @@ from contextlib import contextmanager
 import time
 import traceback
 
-# Initialize connection pool (singleton pattern)
+# Initialize connection pool 
 _pool = None
 
 def get_pool():

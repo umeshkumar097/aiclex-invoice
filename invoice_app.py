@@ -4,7 +4,7 @@
 #
 # Requirements:
 # pip install streamlit pandas reportlab num2words openpyxl requests mysql-connector-python
-# testing
+# testing with db
 import streamlit as st
 from datetime import date, datetime, timedelta
 from db import (
